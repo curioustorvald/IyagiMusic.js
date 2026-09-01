@@ -1,0 +1,10 @@
+{
+  "name": "iyagimusic-js",
+  "version": "0.0.1",
+  "description": "Iyagi Music Sound (.ims / .rol) player and format documentation",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
