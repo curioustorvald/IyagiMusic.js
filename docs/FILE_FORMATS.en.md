@@ -17,7 +17,10 @@ This document was written from the publicly available format descriptions
 (the ModdingWiki articles on *IMS Format*, *AdLib MIDI Format*, *ROL Format*,
 *AdLib Instrument Bank Format*) and then **corrected and extended by measuring
 a corpus of 1128 `.ims`, 450 `.bnk`, 680 `.iss` and 2 `.rol` files**. Every
-claim marked *(measured)* was checked against every file in that corpus.
+claim marked *(measured)* was checked against every file in that corpus. One
+question the files could not settle on their own — what a lyric highlight
+actually looks like (§4.2) — was settled by watching Iyagi itself run under
+DOSBox.
 Where the wiki and the observed data disagree, the data wins and the
 disagreement is called out.
 
@@ -463,6 +466,10 @@ U · X` banner — carries 691 of them, and its right edge runs
 and drains back, three times over, then sweeps smoothly to the end. It reads
 as a volume meter, which is exactly how it looks under Iyagi. 168 corpus lines
 carry more than sixty records and are doing this rather than singing.
+
+*Both halves of this rule were checked against Iyagi itself, running under
+DOSBox: a lyric line fills left to right the way karaoke does, and the banner's
+bar travels rather than filling once and staying.*
 
 `resolveIssSpans()` in `src/formats.js` implements the rule.
 
