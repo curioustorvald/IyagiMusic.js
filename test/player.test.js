@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { IyagiMusic, parseIms, parseBnk, deltaGcd, identify } from "../src/player.js";
+import { IyagiMusic, parseIms, parseBnk, parseIss, deltaGcd, identify } from "../src/player.js";
 
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
 const have = fs.existsSync(CORPUS);
@@ -75,4 +75,24 @@ test("every corpus bank parses and every patch name resolves", { skip: !have }, 
   }
   assert.equal(songs, 1128);
   assert.ok(missing / refs < 0.001, `${missing} of ${refs} patch names unresolved`);
+});
+
+test("ISS credit fields are tool defaults, not credits", { skip: !have }, () => {
+  // Pinned because the page suppresses exactly this set: if a corpus turns up
+  // that carries real credits, this fails and the suppression list is wrong.
+  const root = path.join(CORPUS, "IMS_FILE_MEGA_COLLECTION");
+  const seen = { writer: new Set(), composer: new Set(), singer: new Set(), editor: new Set() };
+  let files = 0;
+  for (const fn of fs.readdirSync(root)) {
+    if (!fn.toUpperCase().endsWith(".ISS")) continue;
+    const iss = parseIss(new Uint8Array(fs.readFileSync(path.join(root, fn))));
+    if (!iss) continue;
+    files++;
+    for (const k of Object.keys(seen)) if (iss[k].trim()) seen[k].add(iss[k].trim());
+  }
+  assert.equal(files, 680);
+  assert.deepEqual([...seen.composer].sort(), ["COMPOSER", "Solgher"]);
+  assert.deepEqual([...seen.singer].sort(), ["Damul", "SINGER"]);
+  assert.deepEqual([...seen.editor].sort(), ["EDITOR", "Salmosa"]);
+  assert.deepEqual([...seen.writer].sort(), ["KimTH", "LeeYS", "MunBK", "WRITER"]);
 });

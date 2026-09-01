@@ -405,6 +405,26 @@ ignore it entirely.
 | 150 | `u16`      | recCount   | |
 | 152 | `u16`      | lineCount  | |
 
+> **The four credit fields are not credits.** They are named for the lyricist,
+> composer, singer and ISS author, and that is what the fields *mean* — but in
+> the wild they hold whatever an ISS-authoring tool left in them. Across all
+> 680 corpus files there are five distinct `writer` values and three each of
+> the rest *(measured)*:
+>
+> | files | writer | composer | singer | editor |
+> |---|---|---|---|---|
+> | 214 | `WRITER` | `COMPOSER` | `SINGER` | `EDITOR` |
+> | 323 | `LeeYS` ×305, `MunBK` ×17, `KimTH` ×1 | `Solgher` | `Damul` | `Salmosa` |
+> | 143 | *(blank)* | *(blank)* | *(blank)* | *(blank)* |
+>
+> The first group is the field labels, untouched. The second is a tool's
+> default handles, with only the first field ever edited — and edited to the
+> ISS author's own handle rather than to the lyricist's. The clincher: across
+> the 601 files that sit beside an `.ims`, **not one** credit string appears
+> anywhere in that song's title *(measured)*, even though IMS titles routinely
+> carry the artist. Do not present these as authorship. The song's own title
+> field is the only attribution these files actually carry.
+
 ### 4.2 Highlight records — `recCount` * 5 bytes
 
 | Type  | Name    | Notes |
