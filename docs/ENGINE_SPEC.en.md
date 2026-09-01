@@ -190,6 +190,12 @@ All arithmetic is 16-bit two's complement. `bend - 8192` gives ±8192; the
 > while leaving the toms and snare in tune. It is a bug, not a tuning
 > convention.
 
+> **Two more deviations to avoid**, both from the other circulating player.
+> It omits the −12 transpose of §5.2, so every note sounds an octave high;
+> and its channel-volume routine computes the scaled level of §4 correctly
+> and then writes the *unscaled* one, so `An` and note-on velocities have no
+> audible effect at all. Neither is a variant reading of the format.
+
 ## 6. Rhythm mode
 
 Melodic mode: nine voices, `percBits = 0`, bit 5 of 0xBD clear.
@@ -225,8 +231,8 @@ voices 7–10.
 **Melodic voice, note on:** `note[v] = chipNote`, `keyOn[v] = 0x20`, run §5.2.
 
 **Melodic voice, note off:** `keyOn[v] = 0`, clear bit 5 of the cached 0xB0
-value and write it back. Do *not* recompute the frequency — writing a stale
-F-number here is what gives these files their characteristic release.
+value and write it back. Do *not* recompute the frequency here; only the key
+bit changes.
 
 **Rhythm voice, note on:** update the pitch as described in §6 if the voice is
 the bass drum or the tom, then set the voice's bit in `percBits` and write

@@ -88,10 +88,15 @@ Each event is:
 | `FC`         | —        | End of song |
 
 Running status applies to `8n`–`En` exactly as in MIDI: a byte < 0x80 in the
-status position re-uses the previous channel status. `F0` and `FC` do **not**
-set running status, and do not clear it either — after a tempo change the
-previous running status is still live. *(measured: 853 000 running-status
-events parse cleanly across the corpus under this rule.)*
+status position re-uses the previous channel status. *(measured: 853 066
+running-status events across the corpus.)*
+
+What `F0` and `FC` do to running status is **undetermined**. The two reference
+players disagree — one leaves the previous channel status live, the other
+overwrites it with the `F0`/`FC` byte — and no corpus file can tell them apart,
+because all 7394 tempo events are followed by an explicit status byte
+*(measured)*. Require an explicit status byte after `F0` and `FC`; a writer
+must never carry running status across a tempo event.
 
 `An` taking **one** data byte instead of MIDI's two is the single most
 important deviation. Get it wrong and the stream desynchronises within a few
