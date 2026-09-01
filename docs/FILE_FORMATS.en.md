@@ -47,7 +47,8 @@ glued onto the end. Layout:
 | 38  | `i32`     | totalTick     | song length in ticks — **advisory only**, see §1.5 |
 | 42  | `i32`     | dataSize      | length of the MIDI event stream |
 | 46  | `i32`     | nrCommand     | event count — see §1.5 |
-| 50  | `u8[8]`   | reserved      | usually zero; 61 of 1128 files put a small number in byte 50 |
+| 50  | `u8`      | srcTickBeat   | ticks per beat of the ROL this was converted from, or 0 if not recorded — §1.8 |
+| 51  | `u8[7]`   | reserved      | usually zero; 3 files put values in bytes 54–57 |
 | 58  | `u8`      | soundMode     | 0 = melodic (9 channels), 1 = percussive (11 channels) |
 | 59  | `u8`      | pitchBRange   | pitch-bend range in semitones, 1–12; always 1 except 3 files that say 60 |
 | 60  | `u16`     | basicTempo    | tempo in beats per minute |
@@ -216,6 +217,12 @@ delta times in a file recovers the composer's original resolution, because the
 AdLib ROL→MIDI converter rescales ROL ticks to 240 per beat. *(measured GCDs:
 30 in 745 files (= 1/8 beat), 20 in 170 (= 1/12 beat, triplets), 60 in 109
 (= 1/4 beat), 15 in 36, and every observed GCD divides 240.)*
+
+`srcTickBeat` is that resolution stated outright, when the converter bothered
+to record it. In all 59 files where it is non-zero, `240 / srcTickBeat` equals
+the delta-time GCD **exactly** *(measured)* — which is both a confirmation of
+the GCD rule and a free shortcut for the files that carry it. The other 1069
+files leave it at zero and have to be measured.
 
 ---
 
