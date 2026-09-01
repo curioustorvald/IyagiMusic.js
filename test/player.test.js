@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { IyagiMusic, parseIms, parseBnk, parseIss, deltaGcd, identify } from "../src/player.js";
+import { IyagiMusic, parseIms, parseBnk, parseIss, deltaGcd, identify, resolveIssSpans } from "../src/player.js";
 
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
 const have = fs.existsSync(CORPUS);
@@ -95,4 +95,50 @@ test("ISS credit fields are tool defaults, not credits", { skip: !have }, () => 
   assert.deepEqual([...seen.singer].sort(), ["Damul", "SINGER"]);
   assert.deepEqual([...seen.editor].sort(), ["EDITOR", "Salmosa"]);
   assert.deepEqual([...seen.writer].sort(), ["KimTH", "LeeYS", "MunBK", "WRITER"]);
+});
+
+test("an ISS cue is the right edge of the highlight, not an isolated run", { skip: !have }, () => {
+  const root = path.join(CORPUS, "IMS_FILE_MEGA_COLLECTION");
+  const iss = parseIss(new Uint8Array(fs.readFileSync(path.join(root, "AGP-DEUX.ISS"))));
+  const spans = resolveIssSpans(iss);
+
+  // An ordinary lyric line wipes left to right: the region only ever grows.
+  const lyric = spans.filter((s, i) => iss.cues[i].line === 11);
+  assert.ok(lyric.length > 5);
+  assert.ok(lyric.every((s) => s.from === lyric[0].from), "the left edge should stay put");
+  assert.ok(lyric.every((s, i) => i === 0 || s.to >= lyric[i - 1].to), "the wipe should not retreat");
+
+  // The DEUX banner uses the same records as an animation: its right edge runs
+  // out and comes back, which is what reads as a volume meter.
+  const banner = spans.filter((s, i) => iss.cues[i].line === 60).slice(0, 30);
+  const edges = banner.map((s) => s.to);
+  assert.ok(Math.max(...edges) - Math.min(...edges) > 12, "the bar should have real travel");
+  let reversals = 0;
+  for (let i = 2; i < edges.length; i++) {
+    if (Math.sign(edges[i] - edges[i - 1]) !== Math.sign(edges[i - 1] - edges[i - 2])) reversals++;
+  }
+  assert.ok(reversals >= 3, `the bar should bounce; saw ${reversals} reversals`);
+});
+
+test("ISS cues tile a lyric line contiguously", { skip: !have }, () => {
+  // The evidence for the accumulating reading: cue runs abut each other rather
+  // than scattering, so they describe one growing region.
+  const root = path.join(CORPUS, "IMS_FILE_MEGA_COLLECTION");
+  let abutting = 0, total = 0;
+  for (const fn of fs.readdirSync(root)) {
+    if (!fn.toUpperCase().endsWith(".ISS")) continue;
+    const iss = parseIss(new Uint8Array(fs.readFileSync(path.join(root, fn))));
+    if (!iss) continue;
+    const byLine = new Map();
+    for (const c of iss.cues) (byLine.get(c.line) ?? byLine.set(c.line, []).get(c.line)).push(c);
+    for (const cs of byLine.values()) {
+      if (cs.length < 3 || cs.length > 60) continue;
+      for (let i = 1; i < cs.length; i++) {
+        const gap = cs[i].startX - (cs[i - 1].startX + cs[i - 1].widthX);
+        total++;
+        if (gap === 0 || gap === 1) abutting++;
+      }
+    }
+  }
+  assert.ok(abutting / total > 0.75, `only ${(100 * abutting / total).toFixed(1)}% of cues abut`);
 });

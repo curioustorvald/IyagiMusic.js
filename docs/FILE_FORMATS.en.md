@@ -439,6 +439,33 @@ corpus's records point at a negative line. *(measured.)*
 
 `tick8` is non-decreasing in 590 of 680 files; sort defensively.
 
+**A record is the right edge of the highlight, not the highlight.** The
+coloured region runs from the leftmost column the line has reached so far up
+to `startX + widthX`; everything to the right of that is uncoloured, and
+moving to another line starts over. Colouring only `[startX, startX+widthX)`
+in isolation lights one syllable at a time, which is not what these files
+describe:
+
+```
+coloured = [ min(startX seen on this line), startX + widthX )
+```
+
+The evidence is in how the records tile. On an ordinary lyric line the gap
+between one record's end and the next one's start is **0** in 168 527 corpus
+cases and **1** — a space — in 75 582 *(measured)*, so the records abut and
+the region grows a syllable at a time. That is the familiar karaoke wipe, and
+it is why a line's first record is often a wide one starting at column 0: it
+paints the indent so the wipe begins flush with the margin.
+
+The same records get used for animation. `AGP-DEUX.ISS` line 60 — a `D · E ·
+U · X` banner — carries 691 of them, and its right edge runs
+`25 30 35 40 · 24 40 38 35 33 30 28 25 24 · 40 38 …`: a bar that shoots out
+and drains back, three times over, then sweeps smoothly to the end. It reads
+as a volume meter, which is exactly how it looks under Iyagi. 168 corpus lines
+carry more than sixty records and are doing this rather than singing.
+
+`resolveIssSpans()` in `src/formats.js` implements the rule.
+
 ### 4.3 Script lines — `lineCount` * 64 bytes
 
 Fixed 64-byte NUL-padded text lines, Johab-encoded, laid out as text-mode

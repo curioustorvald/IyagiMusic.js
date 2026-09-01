@@ -310,6 +310,37 @@ export function parseIss(data, options) {
   return iss;
 }
 
+/**
+ * Resolve each ISS cue into the span of cells that should be coloured when it
+ * is current. Returns an array parallel to `iss.cues`, each `{line, from, to}`
+ * in character cells.
+ *
+ * A cue is not the highlight -- it is the *right edge* of it. The coloured
+ * region runs from the leftmost column the line has reached so far up to
+ * `startX + widthX`, and moving to another line starts over. Reading each cue
+ * as its own isolated run instead lights one syllable at a time, which is not
+ * what these files describe.
+ *
+ * On an ordinary lyric line the cues tile the text left to right -- the gap
+ * between one cue's end and the next cue's start is 0 in 168 527 corpus cases
+ * and 1 (a space) in 75 582 -- so the region grows a syllable at a time and
+ * the effect is the familiar karaoke wipe. The idiom also gets used for
+ * animation: a banner line whose right edge runs out and back reads as a
+ * volume meter, and 168 corpus lines carry more than sixty cues doing exactly
+ * that.
+ */
+export function resolveIssSpans(iss) {
+  const out = [];
+  let line = -1;
+  let origin = 0;
+  for (const cue of iss.cues) {
+    if (cue.line !== line) { line = cue.line; origin = cue.startX; }
+    else if (cue.startX < origin) origin = cue.startX;
+    out.push({ line, from: origin, to: cue.startX + cue.widthX });
+  }
+  return out;
+}
+
 /** Sniff a dropped file by content, since extensions are not always right. */
 export function identify(data) {
   const b = asBytes(data);

@@ -7,10 +7,12 @@ import { OPL2 } from "./opl/chip.js";
 import { NATIVE_RATE } from "./opl/constants.js";
 import {
   parseIms, parseRol, parseBnk, parseIss, resolvePatches, identify, deltaGcd,
+  resolveIssSpans,
 } from "./formats.js";
 import { Sequencer, imsSequence, rolSequence } from "./sequencer.js";
 
 export { OPL2, NATIVE_RATE, parseIms, parseRol, parseBnk, parseIss, identify, deltaGcd };
+export { resolveIssSpans } from "./formats.js";
 export { decodeJohab, decodeJohabField } from "./johab2unicode.js";
 
 /**
@@ -177,15 +179,22 @@ export class IyagiMusic {
     return out;
   }
 
-  /** The lyric line that should be highlighted at the current tick, if any. */
+  /**
+   * The lyric span that should be coloured at the current tick, if any:
+   * `{line, text, from, to}` with `from`/`to` in character cells. See
+   * `resolveIssSpans` -- a cue marks the right edge of the highlight, not an
+   * isolated run.
+   */
   lyricAt(tick = this.tick) {
     if (!this.lyrics) return null;
-    let hit = null;
-    for (const cue of this.lyrics.cues) {
-      if (cue.tick > tick) break;
-      hit = cue;
+    this.lyricSpans ??= resolveIssSpans(this.lyrics);
+    let index = -1;
+    for (let i = 0; i < this.lyrics.cues.length; i++) {
+      if (this.lyrics.cues[i].tick > tick) break;
+      index = i;
     }
-    if (!hit) return null;
-    return { ...hit, text: this.lyrics.lines[hit.line] ?? "" };
+    if (index < 0) return null;
+    const span = this.lyricSpans[index];
+    return { ...span, text: this.lyrics.lines[span.line] ?? "" };
   }
 }
