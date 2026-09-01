@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { OPL2 } from "../src/opl/chip.js";
-import { NATIVE_RATE } from "../src/opl/constants.js";
+import { NATIVE_RATE, EG_ATTACK, EG_OFF } from "../src/opl/constants.js";
 import { LOG_SIN, EXP, expand, KSL_ROM, MULTIPLE_X2 } from "../src/opl/tables.js";
 
 /** A single sine carrier on channel 0, keyed on, at the given fnum/block. */
@@ -112,4 +112,198 @@ test("operator registers address all eighteen operators", () => {
   }
   const levels = chip.operators.map((o) => o.totalLevel);
   assert.equal(levels.filter((v) => v === 0x2a).length, 6);
+});
+
+// ── Envelope timing, against the application manual's own table ────────────
+//
+// Table 3-6 "Attack and Decay Times for Various Rates" states RATE = RM*4 + RL
+// where RM is the key-scaled rate's top four bits and RL its bottom two, and
+// gives a time in milliseconds for every one of the 64 rates, measured over
+// the full 0 dB - 96 dB range. Those milliseconds are for a 3.84 MHz master
+// clock; an AdLib card runs 3.579545 MHz, so the times scale by 3.84/3.579545.
+//
+// This is the only absolute anchor the envelope has. The doubling law alone is
+// scale-free, so it passes just as happily with the whole envelope clock off
+// by a factor of four -- which is exactly what it was.
+const CLOCK = 3.84 / 3.579545;
+const TABLE_3_6 = [
+  // RM, RL, attack ms, decay ms
+  [14, 3, 0.20, 2.74], [14, 0, 0.38, 4.80],
+  [13, 3, 0.42, 5.48], [13, 0, 0.70, 9.60],
+  [12, 3, 0.80, 10.96], [12, 0, 1.40, 19.20],
+  [10, 3, 3.12, 43.84], [10, 0, 5.52, 76.72],
+  [8, 3, 12.48, 175.36], [8, 0, 22.08, 306.88],
+  [6, 3, 49.92, 701.44], [6, 0, 88.32, 1227.52],
+];
+
+// KSR is off, so the key-scale offset is the key scale number's top two bits,
+// which for F-number 0 is just block >> 1: blocks 0, 2, 4, 6 give RL 0...3.
+const BLOCK_FOR_RL = [0, 2, 4, 6];
+
+/** One carrier, sustaining, sustain level 0, so the envelope idles at full. */
+function envelopeRig(block, { ar, rr }) {
+  const chip = new OPL2();
+  chip.write(0x01, 0x20);
+  chip.write(0x20, 0x01);
+  chip.write(0x23, 0x21);                        // EG type sustaining, MULT 1
+  chip.write(0x40, 0x3f); chip.write(0x43, 0x00);
+  chip.write(0x60, 0x00); chip.write(0x63, (ar << 4) | 15);
+  chip.write(0x80, 0x00); chip.write(0x83, rr);
+  chip.write(0xc0, 0x00);
+  chip.write(0xa0, 0x00); chip.write(0xb0, 0x20 | (block << 2));
+  return chip;
+}
+
+const oneSample = new Float32Array(1);
+
+/** Milliseconds from key-on until the attack phase ends. */
+function attackMs(rm, rl) {
+  const chip = envelopeRig(BLOCK_FOR_RL[rl], { ar: rm, rr: 0 });
+  const op = chip.channels[0].car;
+  for (let n = 1; n <= 4e6; n++) {
+    chip.generate(oneSample, 0, 1);
+    if (op.state !== EG_ATTACK) return (n * 1000) / NATIVE_RATE;
+  }
+  return Infinity;
+}
+
+/** Milliseconds from key-off until the envelope is fully attenuated. */
+function releaseMs(rm, rl) {
+  const block = BLOCK_FOR_RL[rl];
+  const chip = envelopeRig(block, { ar: 15, rr: rm });
+  const op = chip.channels[0].car;
+  while (op.state === EG_ATTACK) chip.generate(oneSample, 0, 1);
+  chip.write(0xb0, block << 2);                  // key off
+  for (let n = 1; n <= 4e6; n++) {
+    chip.generate(oneSample, 0, 1);
+    if (op.state === EG_OFF) return (n * 1000) / NATIVE_RATE;
+  }
+  return Infinity;
+}
+
+test("decay and release times match Table 3-6", () => {
+  for (const [rm, rl, , decay] of TABLE_3_6) {
+    const want = decay * CLOCK;
+    const got = releaseMs(rm, rl);
+    assert.ok(Math.abs(got - want) / want < 0.02,
+      `RM ${rm} RL ${rl}: want ${want.toFixed(2)} ms, got ${got.toFixed(2)} ms`);
+  }
+});
+
+test("attack times match Table 3-6", () => {
+  // Looser than the decay: the attack closes a fixed fraction of what is left
+  // each step, so its length is a step COUNT (36 of them) rather than a clean
+  // multiple, and it lands about 6% under the manual throughout. Above rate 56
+  // the manual is quoting hundredths of a millisecond, so a tenth of one is
+  // allowed to stand in for the percentage there.
+  for (const [rm, rl, attack] of TABLE_3_6) {
+    const want = attack * CLOCK;
+    const got = attackMs(rm, rl);
+    const off = Math.abs(got - want);
+    assert.ok(off / want < 0.12 || off < 0.1,
+      `RM ${rm} RL ${rl}: want ${want.toFixed(2)} ms, got ${got.toFixed(2)} ms`);
+  }
+});
+
+test("the maximum rate saturates: RM 15 ignores RL", () => {
+  // All four of the manual's RM 15 entries read the same 2.40 ms.
+  const want = 2.40 * CLOCK;
+  for (let rl = 0; rl < 4; rl++) {
+    const got = releaseMs(15, rl);
+    assert.ok(Math.abs(got - want) / want < 0.02,
+      `RM 15 RL ${rl}: want ${want.toFixed(2)} ms, got ${got.toFixed(2)} ms`);
+  }
+});
+
+test("an attack rate of 15 is effectively instant", () => {
+  // The manual prints 0.00 ms for every rate from 60 up.
+  assert.ok(attackMs(15, 0) < 0.25, `${attackMs(15, 0).toFixed(3)} ms`);
+});
+
+// ── Rhythm mode ───────────────────────────────────────────────────────────
+
+const RHYTHM = { BD: 0x10, SD: 0x08, TOM: 0x04, TC: 0x02, HH: 0x01 };
+
+/** Rhythm mode with every drum's operators at full level and a fast attack. */
+function rhythmRig() {
+  const chip = new OPL2();
+  chip.write(0x01, 0x20);
+  for (const off of [16, 17, 18, 19, 20, 21]) {
+    chip.write(0x20 + off, 0x01);
+    chip.write(0x40 + off, 0x00);
+    chip.write(0x60 + off, 0xf8);
+    chip.write(0x80 + off, 0x08);
+    chip.write(0xe0 + off, 0x00);
+  }
+  chip.write(0xc0 + 6, 0x00);
+  chip.write(0xa6, 0x40); chip.write(0xb6, 2 << 2);          // bass drum, low
+  chip.write(0xa7, 0x00); chip.write(0xb7, (5 << 2) | 2);    // hi-hat/snare
+  chip.write(0xa8, 0x00); chip.write(0xb8, (3 << 2) | 2);    // tom/cymbal
+  chip.write(0xbd, 0x20);
+  return chip;
+}
+
+/** Peak amplitude and spectral flatness of one drum struck alone. */
+function strike(name, samples = 4096) {
+  const chip = rhythmRig();
+  chip.write(0xbd, 0x20 | RHYTHM[name]);
+  const buf = new Float32Array(samples);
+  chip.generate(buf, 0, samples);
+  let peak = 0;
+  for (const v of buf) peak = Math.max(peak, Math.abs(v));
+
+  const N = 512;
+  let sumLog = 0, sumLin = 0, bins = 0;
+  for (let k = 1; k < N / 2; k++) {
+    let re = 0, im = 0;
+    for (let t = 0; t < N; t++) {
+      const a = (-2 * Math.PI * k * t) / N;
+      re += buf[t] * Math.cos(a); im += buf[t] * Math.sin(a);
+    }
+    const m = Math.hypot(re, im) / N;
+    if (m > 0) { sumLog += Math.log(m); sumLin += m; bins++; }
+  }
+  // Geometric over arithmetic mean: 1 is white noise, near 0 is a pure tone.
+  return { peak, flatness: Math.exp(sumLog / bins) / (sumLin / bins) };
+}
+
+test("every rhythm voice actually sounds", () => {
+  // The snare used to be silent in all of them: its phase was derived from the
+  // wrong bit and only ever landed on the sine's two zero crossings.
+  for (const name of Object.keys(RHYTHM)) {
+    assert.ok(strike(name).peak > 0.05, `${name} was inaudible`);
+  }
+});
+
+test("the metallic drums are broadband and the pitched ones are not", () => {
+  const flat = Object.fromEntries(
+    Object.keys(RHYTHM).map((n) => [n, strike(n).flatness]));
+  assert.ok(flat.TOM < 0.15, `tom-tom should be a plain sine: ${flat.TOM}`);
+  assert.ok(flat.BD < 0.35, `bass drum should be tonal: ${flat.BD}`);
+  assert.ok(flat.HH > 0.5, `hi-hat should be noisy: ${flat.HH}`);
+  assert.ok(flat.SD > 0.5, `snare should be noisy: ${flat.SD}`);
+  assert.ok(flat.TC > 0.25 && flat.TC < 0.7, `cymbal should be metallic: ${flat.TC}`);
+});
+
+test("the hi-hat and cymbal are inharmonic, not the channel's own pitch", () => {
+  // Their phase comes from single bits of two accumulators, so retuning the
+  // channel must not simply transpose them.
+  const pitched = (name, block) => {
+    const chip = rhythmRig();
+    chip.write(0xb7, (block << 2) | 2);
+    chip.write(0xb8, (block << 2) | 2);
+    chip.write(0xbd, 0x20 | RHYTHM[name]);
+    const buf = new Float32Array(2048);
+    chip.generate(buf, 0, buf.length);
+    let crossings = 0;
+    for (let i = 1; i < buf.length; i++) if (buf[i - 1] <= 0 && buf[i] > 0) crossings++;
+    return crossings;
+  };
+  for (const name of ["HH", "TC"]) {
+    const low = pitched(name, 2), high = pitched(name, 5);
+    assert.ok(high / low < 4, `${name} transposed like a pitched voice: ${low} -> ${high}`);
+  }
+  // The tom, by contrast, is a pitched voice and must transpose.
+  const tomLow = pitched("TOM", 2), tomHigh = pitched("TOM", 5);
+  assert.ok(tomHigh / tomLow > 4, `tom-tom did not transpose: ${tomLow} -> ${tomHigh}`);
 });

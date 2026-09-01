@@ -236,7 +236,23 @@ export class OPL2 {
     }
   }
 
-  /** One envelope step for one operator. Returns nothing; mutates `op.env`. */
+  /**
+   * One envelope tick for one operator. Mutates `op.env` and `op.state`.
+   *
+   * Timing follows Table 3-6 of the YM3812 application manual, which states
+   * the attack and decay times for every key-scaled RATE = 4·R + Rks. Two
+   * facts fix the whole clock. The rate's top four bits (RM) double the
+   * envelope's speed at every step and its bottom two (RL) scale it by
+   * (4 + RL)/4 -- the manual's four RL entries at a given RM are that ratio
+   * exactly. And one envelope step being 0.1875 dB makes a full decay 512 of
+   * them, which the manual's 9.60 ms at RM 13, RL 0 turns into one step a
+   * sample. RM 15 saturates: all four of its RL entries read the same 2.40 ms.
+   *
+   * (The manual's absolute times are for a 3.84 MHz master clock. An AdLib
+   * card runs 3.579545 MHz, so everything below comes out 7.3% slower than
+   * the printed table -- the counter, not the millisecond figure, is the
+   * hardware fact.)
+   */
   #advanceEnvelope(op) {
     if (op.state === EG_OFF) return;
     const rateParam =
@@ -245,44 +261,61 @@ export class OPL2 {
       : op.state === EG_SUSTAIN ? (op.sustaining ? 0 : op.release)
       : op.release;
     if (rateParam === 0) {
-      // A rate of zero is not "slow", it is "never".
+      // A rate of zero is not "slow", it is "never": §3-1-5 spells out that
+      // RATE is 0 whenever R is 0, whatever the key scaling adds.
       if (op.state === EG_SUSTAIN || op.state === EG_DECAY) return;
       if (op.state === EG_RELEASE) return;
     }
-    const rate = rateParam === 0 ? 0 : Math.min(63, rateParam * 4 + op.ksrOffset);
+    let rate = rateParam === 0 ? 0 : Math.min(63, rateParam * 4 + op.ksrOffset);
     if (rate === 0) return;
+    if (rate > 60) rate = 60;                  // RM 15 ignores RL
 
-    // The top four bits halve the period each step; the bottom two interpolate
-    // by skipping four, five, six or seven of every eight opportunities.
-    const shift = 14 - (rate >> 2);
-    let step;
+    const shift = 12 - (rate >> 2);
+    let steps;
     if (shift >= 0) {
       if ((this.egCounter & ((1 << shift) - 1)) !== 0) return;
-      step = EG_DUTY[rate & 3][(this.egCounter >> shift) & 7];
+      steps = EG_DUTY[rate & 3][(this.egCounter >> shift) & 7];
     } else {
-      step = EG_DUTY[rate & 3][this.egCounter & 7] << -shift;
+      steps = EG_DUTY[rate & 3][this.egCounter & 7] << -shift;
     }
-    if (step === 0) return;
+    if (steps === 0) return;
 
+    // Above RM 12 the envelope moves more than once a sample. Those extra
+    // moves are taken as separate unit steps rather than as one big one: the
+    // decay is linear so it cannot tell the difference, but the attack closes
+    // a fixed FRACTION of the remaining distance each step, and only
+    // compounding keeps its shape -- the manual's ratio of decay time to
+    // attack time is a constant 13.9 across every rate, and that constant is
+    // what the unit step reproduces.
+    const from = op.state;
+    for (let i = 0; i < steps; i++) {
+      this.#envelopeStep(op);
+      if (op.state !== from) break;
+    }
+  }
+
+  /** One 0.1875 dB move of the envelope, in whichever phase it is in. */
+  #envelopeStep(op) {
     switch (op.state) {
       case EG_ATTACK:
         // Exponential approach to full volume: the closer it gets, the
-        // smaller the step, which is why attack rate 15 sounds instant.
-        op.env -= ((op.env >> 3) + 1) * step;
+        // smaller the step. 511 down to 0 takes 36 of these, which is the
+        // 512/13.9 the manual's two time columns imply.
+        op.env -= (op.env >> 3) + 1;
         if (op.env <= 0) { op.env = 0; op.state = EG_DECAY; }
         break;
       case EG_DECAY:
-        op.env += step;
+        op.env += 1;
         if (op.env >= op.sustainLevel) { op.env = op.sustainLevel; op.state = EG_SUSTAIN; }
         break;
       case EG_SUSTAIN:
-        // Only reached when the operator is not "sustaining": it keeps
-        // falling at the release rate while still keyed on.
-        op.env += step;
+        // Only reached when the operator is not "sustaining": §3-1-7 has a
+        // diminishing sound switch to the release rate at the sustain level.
+        op.env += 1;
         if (op.env >= ENV_MAX) { op.env = ENV_MAX; op.state = EG_OFF; }
         break;
       case EG_RELEASE:
-        op.env += step;
+        op.env += 1;
         if (op.env >= ENV_MAX) { op.env = ENV_MAX; op.state = EG_OFF; }
         break;
       default:
@@ -360,16 +393,32 @@ export class OPL2 {
   }
 
   /**
-   * The five rhythm voices. Bass drum is an ordinary two-operator channel;
-   * the other four are single operators driven by channel 7 and 8 phases and
-   * by the noise generator. See docs/OPL2_NOTES.en.md — the metallic
-   * instruments are a documented approximation, not a gate-level model.
+   * The five rhythm voices.
+   *
+   * The bass drum is an ordinary two-operator channel and the tom-tom an
+   * ordinary free-running sine. The other three are not oscillators at all:
+   * the chip throws away their phase accumulators' low bits and builds a
+   * phase out of single bits of the hi-hat's and top cymbal's accumulators,
+   * so that all three come out inharmonic and share one timbre family. Their
+   * envelopes, levels and F-numbers still work normally.
+   *
+   *   hh = channel 8's modulator phase, tc = channel 9's carrier phase, both
+   *   as the 10-bit index the waveform table takes
+   *
+   *   xor = (hh2 ^ hh7) | hh3 | (tc5 ^ tc3)
+   *
+   *   hi-hat      (xor << 9) | (xor ^ noise ? 0x0d0 : 0x034)
+   *   snare drum  (hh8 ? 0x200 : 0x100) ^ (noise << 8)
+   *   top cymbal  (xor << 9) | 0x100
+   *
+   * This is the hardware's own function, from the published description of
+   * the die rather than from anyone's code -- see docs/OPL2_NOTES.en.md. The
+   * application manual documents the drums only as tonal advice (§5-4) and
+   * says nothing about how they are generated.
    */
   #generateRhythm(tremolo, vibrato) {
     const ops = this.operators;
     const ch6 = this.channels[6];
-    const ch7 = this.channels[7];
-    const ch8 = this.channels[8];
     const hh = ops[OP_BY_OFFSET[RHYTHM_HH_OP]];
     const sd = ops[OP_BY_OFFSET[RHYTHM_SD_OP]];
     const tom = ops[OP_BY_OFFSET[RHYTHM_TOM_OP]];
@@ -384,25 +433,27 @@ export class OPL2 {
       ? m + this.#operate(ch6.car, 0, tremolo, vibrato)
       : this.#operate(ch6.car, (m / 2) | 0, tremolo, vibrato);
 
-    // Tom-tom is a plain sine on channel 8's frequency.
+    // Tom-tom is a plain sine on channel 9's frequency.
     mix += this.#operate(tom, 0, tremolo, vibrato);
 
-    const noiseBit = this.noise & 1;
-    const ph7 = (ch7.mod.phase >>> 10) & 0x3ff;
-    const ph8 = (ch8.car.phase >>> 10) & 0x3ff;
-    // The metallic pair: a square derived from both drum channels' phases.
-    const metal = (((ph7 >> 8) ^ (ph7 >> 4)) | ((ph7 >> 6) ^ 1) |
-                   ((ph8 >> 8) ^ (ph8 >> 5))) & 1;
+    // The remaining three read each other's accumulators, so every phase has
+    // to be advanced before any of them is sampled.
+    hh.phase = (hh.phase + hh.phaseInc) >>> 0;
+    sd.phase = (sd.phase + sd.phaseInc) >>> 0;
+    tc.phase = (tc.phase + tc.phaseInc) >>> 0;
+    const hp = (hh.phase >>> 10) & 0x3ff;
+    const tp = (tc.phase >>> 10) & 0x3ff;
+    const noise = this.noise & 1;
+    const xor = (((hp >> 2) ^ (hp >> 7)) | (hp >> 3) | ((tp >> 5) ^ (tp >> 3))) & 1;
 
-    mix += this.#rhythmOperator(sd, ((ph7 >> 9) & 1) ^ noiseBit ? 0x200 : 0x000, tremolo);
-    mix += this.#rhythmOperator(hh, metal ^ noiseBit ? 0x2d0 : 0x034, tremolo);
-    mix += this.#rhythmOperator(tc, metal ? 0x300 : 0x100, tremolo);
+    mix += this.#rhythmOperator(hh, (xor << 9) | (xor ^ noise ? 0x0d0 : 0x034), tremolo);
+    mix += this.#rhythmOperator(sd, (((hp >> 8) & 1) ? 0x200 : 0x100) ^ (noise << 8), tremolo);
+    mix += this.#rhythmOperator(tc, (xor << 9) | 0x100, tremolo);
     return mix;
   }
 
   /** A single-operator drum: the phase is dictated, not accumulated freely. */
   #rhythmOperator(op, phase, tremolo) {
-    op.phase = (op.phase + op.phaseInc) >>> 0;
     if (op.state === EG_OFF) { op.prev = op.out; op.out = 0; return 0; }
     const logv = waveform(op.wave, phase, sign);
     if (logv === SILENCE) { op.prev = op.out; op.out = 0; return 0; }
