@@ -1,4 +1,4 @@
-# iyagimusic-js
+# IyagiMusic.js
 
 이야기 뮤직 사운드(`.ims`)와 애드립 ROL(`.rol`) 음악을 웹 브라우저에서
 재생하기 위한 라이브러리와 포맷 문서입니다.

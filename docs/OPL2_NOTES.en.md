@@ -53,6 +53,19 @@ makes some songs play with the wrong instruments and others fall silent.
   the remaining distance — which is why attack rate 15 sounds instantaneous
   even though the counter can only move one step a sample.
 
+## Fixed after listening
+
+- **Operator output scale.** The exponential table plus its implicit leading
+  bit spans 1024…2047, and the first version stopped there — so full scale was
+  ±2042 where the chip's is ±4084. Since an operator's output *is* the phase
+  deviation handed to the next one, that halved both the modulation index and
+  the feedback depth, and every FM patch came out dull. The documented
+  feedback anchor catches it: setting 7 is 4π, two whole cycles of a 1024-step
+  phase, which only works out at a full scale of 4096. Measured on a 1:1 pair
+  at full level, harmonics above 1% of the peak went from the 11th to the
+  18th. Nothing else moved: pitch, total level and envelope timing are
+  unaffected, and the mix scale was halved to keep the output level.
+
 ## Knowingly approximate
 
 - **Tremolo and vibrato** are computed as an analytic triangle at the

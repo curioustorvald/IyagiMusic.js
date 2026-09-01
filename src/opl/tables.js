@@ -32,12 +32,22 @@ export const EXP = (() => {
   return t;
 })();
 
-/** Total attenuation (in 1/256-log2 units) to a linear amplitude, chip-style. */
+/**
+ * Total attenuation (in 1/256-log2 units) to a linear amplitude, chip-style.
+ *
+ * The table plus its implicit leading bit spans 1024…2047, and the operator
+ * output carries one more bit below the sign, so full scale is about ±4084.
+ * That factor is not cosmetic: the operator's output IS the phase deviation
+ * fed to the next operator, so halving it halves the modulation index and the
+ * feedback depth, and the patch comes out dull. Feedback 7 is documented as
+ * 4π — two whole cycles of a 1024-step phase — which only works out if full
+ * scale is 4096.
+ */
 export function expand(att) {
   if (att >= 0x1800) return 0;                 // past −96 dB, the chip gives up
   const frac = att & 0xff;
   const whole = att >> 8;
-  return (EXP[255 - frac] + 1024) >> whole;
+  return ((EXP[255 - frac] + 1024) << 1) >> whole;
 }
 
 /**

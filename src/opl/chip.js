@@ -350,7 +350,7 @@ export class OPL2 {
 
       // The chip sums nine channels into a 16-bit DAC; scale so that a single
       // full-amplitude operator is about 0.5 and a full mix stays inside ±1.
-      out[offset + n] = Math.fround(mix / 8192);
+      out[offset + n] = Math.fround(mix / 16384);
       this.egCounter = (this.egCounter + 1) >>> 0;
       this.lfoPhase = (this.lfoPhase + 1) >>> 0;
       // 23-bit LFSR, tapped at 22 and 8 — the chip's own noise for the drums.
