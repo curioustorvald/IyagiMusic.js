@@ -19,7 +19,7 @@
 | 조합형 → 유니코드 변환기 (JS / Python) | 있음, 검증됨 |
 | OPL2(YM3812) 에뮬레이터 | 있음, 자체 구현 |
 | 재생 라이브러리 | 있음 |
-| 프런트엔드 플레이어 | 있음 (`../github-pages/`) |
+| 프런트엔드 플레이어 | 있음 (`IyagiMusic-web`) |
 
 ## 문서
 
@@ -57,7 +57,7 @@ music.render(float32Array); // 모노 샘플을 채웁니다
 
 재생 중인 칩 상태는 성부 단위로 읽을 수 있습니다. 스펙트럼은 없습니다 —
 OPL2가 내놓는 것은 모노 한 줄뿐이고, 대신 성부마다 무엇을 어떻게 울리고
-있는지가 있습니다. `github-pages/`의 막대 표시가 이것을 씁니다.
+있는지가 있습니다. `IyagiMusic-web`의 막대 표시가 이것을 씁니다.
 
 ```js
 const meter = IyagiMusic.meterBuffer();
@@ -70,12 +70,12 @@ music.patchNames;          // 성부마다 지금 걸려 있는 뱅크 음색 �
 
 읽을 때마다 피크 누산기가 비워지므로 한 화면에 한 번씩만 부르면 됩니다.
 
-브라우저에서는 `github-pages/`의 플레이어가 이것을 AudioWorklet 안에서
+브라우저에서는 `IyagiMusic-web`의 플레이어가 이것을 AudioWorklet 안에서
 돌립니다. 워크릿은 ES 모듈을 못 불러오므로 한 파일로 이어 붙인 번들이
 필요한데, `tools/build-pages.mjs`가 그것과 `lib/` 복사본을 함께 만듭니다.
 
 ```
-node tools/build-pages.mjs        # github-pages/ 를 최신 소스로 갱신
+node tools/build-pages.mjs        # IyagiMusic-web을 최신 소스로 갱신
 node tools/render.mjs song.ims bank.bnk out.wav 30   # WAV로 뽑기
 ```
 
