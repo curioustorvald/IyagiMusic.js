@@ -4,7 +4,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { IyagiMusic, parseIms, parseBnk, parseIss, deltaGcd, identify, resolveIssSpans } from "../src/player.js";
+import {
+  IyagiMusic, parseIms, parseBnk, parseIss, deltaGcd, identify, resolveIssSpans,
+  METER_STRIDE, M_PEAK, M_VOLUME,
+} from "../src/player.js";
 
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
 const have = fs.existsSync(CORPUS);
@@ -141,4 +144,32 @@ test("ISS cues tile a lyric line contiguously", { skip: !have }, () => {
     }
   }
   assert.ok(abutting / total > 0.75, `only ${(100 * abutting / total).toFixed(1)}% of cues abut`);
+});
+
+test("the meters follow what the song actually plays", { skip: !have }, () => {
+  // SHC uses all eleven voices, drums included, inside its first fifteen
+  // seconds -- which is what makes it the one to check the rhythm rows on.
+  const m = new IyagiMusic({ song: read("SHC.IMS"), fallbackBank: read("STANDARD.BNK") });
+  assert.equal(m.voiceCount, 11);
+  const meter = IyagiMusic.meterBuffer();
+  const block = new Float32Array(4800);
+  const peak = new Float64Array(11);
+  const volume = new Float64Array(11);
+  for (let i = 0; i < 150; i++) {
+    m.render(block, 0, block.length);
+    m.readMeters(meter);
+    for (let v = 0; v < 11; v++) {
+      peak[v] = Math.max(peak[v], meter[v * METER_STRIDE + M_PEAK]);
+      volume[v] = Math.max(volume[v], meter[v * METER_STRIDE + M_VOLUME]);
+    }
+  }
+  for (let v = 0; v < 11; v++) {
+    if (v === 8) continue;                       // this song never hits the tom
+    assert.ok(peak[v] > 0.01, `voice ${v} never metered: ${peak[v]}`);
+    assert.ok(volume[v] > 0, `voice ${v} reported no channel volume`);
+  }
+  assert.ok(peak[8] === 0, "the tom sounded in a song that does not use it");
+  // Every voice has been given a bank patch, and the epoch moved as it happened.
+  assert.equal(m.patchNames.filter(Boolean).length, 11);
+  assert.ok(m.patchEpoch > 11);
 });

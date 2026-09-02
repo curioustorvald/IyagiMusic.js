@@ -4,7 +4,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { OPL2 } from "../src/opl/chip.js";
-import { NATIVE_RATE, EG_ATTACK, EG_OFF } from "../src/opl/constants.js";
+import {
+  NATIVE_RATE, EG_ATTACK, EG_OFF,
+  METER_VOICES, METER_STRIDE, METER_BD, METER_SD, METER_TOM, METER_TC, METER_HH,
+  M_PEAK, M_MOD_DB, M_NOTE, M_KEY_ON, CF_RHYTHM,
+} from "../src/opl/constants.js";
 import { LOG_SIN, EXP, expand, KSL_ROM, MULTIPLE_X2 } from "../src/opl/tables.js";
 
 /** A single sine carrier on channel 0, keyed on, at the given fnum/block. */
@@ -306,4 +310,69 @@ test("the hi-hat and cymbal are inharmonic, not the channel's own pitch", () => 
   // The tom, by contrast, is a pitched voice and must transpose.
   const tomLow = pitched("TOM", 2), tomHigh = pitched("TOM", 5);
   assert.ok(tomHigh / tomLow > 4, `tom-tom did not transpose: ${tomLow} -> ${tomHigh}`);
+});
+
+// ── the meters ────────────────────────────────────────────────────────────
+// They are a display's only window onto the chip, so they have to say what the
+// chip is really doing rather than what it was last told.
+
+const meters = (chip) => chip.readMeters(new Float32Array(METER_VOICES * METER_STRIDE));
+const row = (m, voice, field) => m[voice * METER_STRIDE + field];
+
+test("a metered note is the frequency the channel is actually playing", () => {
+  // 580/4 is 440.00 Hz by the F-number formula, so it must read back as A4.
+  for (const [fnum, block, midi] of [[580, 4, 69], [290, 4, 57], [580, 5, 81]]) {
+    const chip = new OPL2();
+    tone(chip, fnum, block);
+    const m = meters(chip);
+    assert.ok(Math.abs(row(m, 0, M_NOTE) - midi) < 0.05,
+      `fnum ${fnum} block ${block}: ${row(m, 0, M_NOTE)} should be ${midi}`);
+    assert.equal(row(m, 0, M_KEY_ON), 1);
+  }
+  // A channel that has never been given an F-number has no note to report.
+  assert.equal(row(meters(new OPL2()), 0, M_NOTE), -1);
+});
+
+test("the peak is per voice, and reading it clears it", () => {
+  const chip = new OPL2();
+  tone(chip, 690, 4);
+  chip.generate(new Float32Array(2048), 0, 2048);
+  const first = meters(chip);
+  assert.ok(row(first, 0, M_PEAK) > 0.1, `channel 0 was silent: ${row(first, 0, M_PEAK)}`);
+  for (let v = 1; v < METER_VOICES; v++) {
+    assert.equal(row(first, v, M_PEAK), 0, `channel ${v} should be silent`);
+  }
+  // Nothing has been rendered since, so there is no new peak to report.
+  assert.equal(row(meters(chip), 0, M_PEAK), 0);
+});
+
+test("total level shows up in the metered modulator depth", () => {
+  const chip = new OPL2();
+  tone(chip, 690, 4);
+  chip.write(0xc0, 0x00);                      // modulator on slot 0
+  chip.write(0x40, 0);                         // wide open
+  chip.generate(new Float32Array(64), 0, 64);
+  const open = row(meters(chip), 0, M_MOD_DB);
+  chip.write(0x40, 20);                        // 20 steps of 0.75 dB
+  chip.generate(new Float32Array(64), 0, 64);
+  const shut = row(meters(chip), 0, M_MOD_DB);
+  assert.ok(Math.abs(shut - open - 15) < 0.5, `${open} -> ${shut} is not 15 dB`);
+});
+
+test("each rhythm instrument meters on its own row", () => {
+  const rows = { BD: METER_BD, SD: METER_SD, TOM: METER_TOM, TC: METER_TC, HH: METER_HH };
+  for (const [name, mask] of Object.entries(RHYTHM)) {
+    const chip = rhythmRig();
+    chip.write(0xbd, 0x20 | mask);
+    chip.generate(new Float32Array(4096), 0, 4096);
+    const m = meters(chip);
+    assert.ok(chip.chipFlags & CF_RHYTHM);
+    assert.ok(row(m, rows[name], M_PEAK) > 0.05, `${name} did not meter`);
+    for (const [other, r] of Object.entries(rows)) {
+      if (other !== name) assert.equal(row(m, r, M_PEAK), 0, `${name} leaked into ${other}`);
+    }
+    // Only the two drums with a channel of their own carry a pitch; §6.
+    const tonal = name === "BD" || name === "TOM";
+    assert.equal(row(m, rows[name], M_NOTE) >= 0, tonal, `${name} pitch`);
+  }
 });

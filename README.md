@@ -55,6 +55,21 @@ music.missing;             // 뱅크에서 못 찾은 음색 이름들
 music.render(float32Array); // 모노 샘플을 채웁니다
 ```
 
+재생 중인 칩 상태는 성부 단위로 읽을 수 있습니다. 스펙트럼은 없습니다 —
+OPL2가 내놓는 것은 모노 한 줄뿐이고, 대신 성부마다 무엇을 어떻게 울리고
+있는지가 있습니다. `github-pages/`의 막대 표시가 이것을 씁니다.
+
+```js
+const meter = IyagiMusic.meterBuffer();
+music.readMeters(meter);   // 성부마다 METER_STRIDE개: 피크, 변조기 감쇠(dB),
+                           // 음 높이(MIDI), 키온, 포락선 단계, 음량, 음색 비트
+music.voiceCount;          // 9, 리듬 모드면 11 (멜로디 6 + 드럼 5)
+music.chipFlags;           // 리듬 모드 · 트레몰로 · 비브라토 · 파형 선택
+music.patchNames;          // 성부마다 지금 걸려 있는 뱅크 음색 이름
+```
+
+읽을 때마다 피크 누산기가 비워지므로 한 화면에 한 번씩만 부르면 됩니다.
+
 브라우저에서는 `github-pages/`의 플레이어가 이것을 AudioWorklet 안에서
 돌립니다. 워크릿은 ES 모듈을 못 불러오므로 한 파일로 이어 붙인 번들이
 필요한데, `tools/build-pages.mjs`가 그것과 `lib/` 복사본을 함께 만듭니다.

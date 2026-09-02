@@ -8,10 +8,15 @@
 
 import {
   NATIVE_RATE, ENV_MAX, ENV_TO_LOG, TL_TO_LOG, KSL_TO_LOG,
+  ENV_STEP_DB, TL_STEP_DB,
   EG_OFF, EG_ATTACK, EG_DECAY, EG_SUSTAIN, EG_RELEASE,
   CHANNEL_COUNT, OPERATOR_COUNT, CHANNEL_OP_OFFSET, OPERATOR_OFFSET,
   RHYTHM_BD, RHYTHM_SD, RHYTHM_TOM, RHYTHM_TC, RHYTHM_HH,
   RHYTHM_HH_OP, RHYTHM_SD_OP, RHYTHM_TOM_OP, RHYTHM_TC_OP,
+  METER_VOICES, METER_STRIDE, METER_BD, METER_SD, METER_TOM, METER_TC, METER_HH,
+  M_PEAK, M_MOD_DB, M_NOTE, M_KEY_ON, M_STATE, M_TIMBRE,
+  T_CAR_WAVE, T_MOD_WAVE, T_ADDITIVE, T_FEEDBACK,
+  CF_RHYTHM, CF_TREMOLO, CF_VIBRATO, CF_WAVESEL,
 } from "./constants.js";
 import {
   MULTIPLE_X2, SUSTAIN_LEVEL, EG_DUTY, LOG_SIN, SILENCE,
@@ -44,6 +49,9 @@ const OP_IS_CARRIER = (() => {
 })();
 
 const sign = [0];
+
+/** Nine channels into a 16-bit DAC: what `generate` divides its mix by. */
+const MIX_SCALE = 16384;
 
 class Operator {
   constructor(index) {
@@ -103,6 +111,8 @@ export class OPL2 {
     this.lfoPhase = 0;
     this.noise = 1;
     this.feedbackBuf = new Float64Array(CHANNEL_COUNT * 2);
+    // Loudest sample each voice has produced since a display last looked.
+    this.peaks = new Float32Array(METER_VOICES);
   }
 
   /** Write one chip register. Unknown addresses are stored and ignored. */
@@ -373,17 +383,15 @@ export class OPL2 {
           fb = (ch.mod.out + ch.mod.prev) / 2 / (1 << (8 - ch.feedback));
         }
         const m = this.#operate(ch.mod, fb | 0, tremolo, vibrato);
-        if (ch.additive) {
-          mix += m + this.#operate(ch.car, 0, tremolo, vibrato);
-        } else {
-          mix += this.#operate(ch.car, (m / 2) | 0, tremolo, vibrato);
-        }
+        mix += this.#tally(c, ch.additive
+          ? m + this.#operate(ch.car, 0, tremolo, vibrato)
+          : this.#operate(ch.car, (m / 2) | 0, tremolo, vibrato));
       }
       if (this.rhythmMode) mix += this.#generateRhythm(tremolo, vibrato);
 
       // The chip sums nine channels into a 16-bit DAC; scale so that a single
       // full-amplitude operator is about 0.5 and a full mix stays inside ±1.
-      out[offset + n] = Math.fround(mix / 16384);
+      out[offset + n] = Math.fround(mix / MIX_SCALE);
       this.egCounter = (this.egCounter + 1) >>> 0;
       this.lfoPhase = (this.lfoPhase + 1) >>> 0;
       // 23-bit LFSR, tapped at 22 and 8 — the chip's own noise for the drums.
@@ -429,12 +437,12 @@ export class OPL2 {
     let fb = 0;
     if (ch6.feedback) fb = (ch6.mod.out + ch6.mod.prev) / 2 / (1 << (8 - ch6.feedback));
     const m = this.#operate(ch6.mod, fb | 0, tremolo, vibrato);
-    mix += ch6.additive
+    mix += this.#tally(METER_BD, ch6.additive
       ? m + this.#operate(ch6.car, 0, tremolo, vibrato)
-      : this.#operate(ch6.car, (m / 2) | 0, tremolo, vibrato);
+      : this.#operate(ch6.car, (m / 2) | 0, tremolo, vibrato));
 
     // Tom-tom is a plain sine on channel 9's frequency.
-    mix += this.#operate(tom, 0, tremolo, vibrato);
+    mix += this.#tally(METER_TOM, this.#operate(tom, 0, tremolo, vibrato));
 
     // The remaining three read each other's accumulators, so every phase has
     // to be advanced before any of them is sampled.
@@ -446,10 +454,25 @@ export class OPL2 {
     const noise = this.noise & 1;
     const xor = (((hp >> 2) ^ (hp >> 7)) | (hp >> 3) | ((tp >> 5) ^ (tp >> 3))) & 1;
 
-    mix += this.#rhythmOperator(hh, (xor << 9) | (xor ^ noise ? 0x0d0 : 0x034), tremolo);
-    mix += this.#rhythmOperator(sd, (((hp >> 8) & 1) ? 0x200 : 0x100) ^ (noise << 8), tremolo);
-    mix += this.#rhythmOperator(tc, (xor << 9) | 0x100, tremolo);
+    mix += this.#tally(METER_HH,
+      this.#rhythmOperator(hh, (xor << 9) | (xor ^ noise ? 0x0d0 : 0x034), tremolo));
+    mix += this.#tally(METER_SD,
+      this.#rhythmOperator(sd, (((hp >> 8) & 1) ? 0x200 : 0x100) ^ (noise << 8), tremolo));
+    mix += this.#tally(METER_TC,
+      this.#rhythmOperator(tc, (xor << 9) | 0x100, tremolo));
     return mix;
+  }
+
+  /**
+   * Note one voice's contribution to the mix, and pass it through. This runs
+   * on every voice of every sample whether or not anyone is watching, which
+   * costs a few per cent of the render; a flag to switch it off would only
+   * trade that for a display that can show stale silence.
+   */
+  #tally(voice, value) {
+    const level = value < 0 ? -value : value;
+    if (level > this.peaks[voice]) this.peaks[voice] = level;
+    return value;
   }
 
   /** A single-operator drum: the phase is dictated, not accumulated freely. */
@@ -461,5 +484,81 @@ export class OPL2 {
     op.prev = op.out;
     op.out = v;
     return v;
+  }
+
+  // ── What the chip looks like from outside ──────────────────────────────
+  // A display cannot ask the chip for a spectrum -- nothing here ever
+  // computes one -- but it can ask what each voice is doing, which is more
+  // to the point on a nine-voice FM chip anyway.
+
+  /** Chip-wide switches, as the CF_* bits. */
+  get chipFlags() {
+    return (this.rhythmMode ? CF_RHYTHM : 0) | (this.amDepth ? CF_TREMOLO : 0) |
+      (this.vibDepth ? CF_VIBRATO : 0) | (this.waveSelectEnabled ? CF_WAVESEL : 0);
+  }
+
+  /**
+   * Fill `out` with one METER_STRIDE-wide row per voice and return it.
+   *
+   * Reading clears the peak accumulators, so each call reports the loudest
+   * sample since the last one -- which is what a peak meter wants, and why
+   * two readers cannot share one chip. M_VOLUME is left alone: channel volume
+   * is the driver's idea, not a register the chip holds.
+   *
+   * @param {Float32Array} out at least METER_VOICES * METER_STRIDE long
+   */
+  readMeters(out) {
+    out.fill(0);
+    const melodic = this.rhythmMode ? 6 : CHANNEL_COUNT;
+    for (let c = 0; c < melodic; c++) this.#meterChannel(out, c, this.channels[c]);
+    if (this.rhythmMode) {
+      const bits = this.rhythmBits;
+      const ops = this.operators;
+      this.#meterChannel(out, METER_BD, this.channels[6], (bits & RHYTHM_BD) !== 0);
+      // The other four are one operator each. Only the tom is tonal: the
+      // hi-hat, snare and cymbal build their phase out of bits of each
+      // other's accumulators, so their channel's F-number is not a pitch and
+      // reporting it as one would invent a note nobody is playing.
+      const tomNote = this.#noteOf(this.channels[8]);
+      this.#meterOperator(out, METER_SD, ops[OP_BY_OFFSET[RHYTHM_SD_OP]], bits & RHYTHM_SD, -1);
+      this.#meterOperator(out, METER_TOM, ops[OP_BY_OFFSET[RHYTHM_TOM_OP]], bits & RHYTHM_TOM, tomNote);
+      this.#meterOperator(out, METER_TC, ops[OP_BY_OFFSET[RHYTHM_TC_OP]], bits & RHYTHM_TC, -1);
+      this.#meterOperator(out, METER_HH, ops[OP_BY_OFFSET[RHYTHM_HH_OP]], bits & RHYTHM_HH, -1);
+    }
+    this.peaks.fill(0);
+    return out;
+  }
+
+  #meterChannel(out, row, ch, keyOn = ch.keyOn) {
+    const o = row * METER_STRIDE;
+    out[o + M_PEAK] = this.peaks[row] / MIX_SCALE;
+    out[o + M_MOD_DB] = this.#attenuationDb(ch.mod);
+    out[o + M_NOTE] = this.#noteOf(ch);
+    out[o + M_KEY_ON] = keyOn ? 1 : 0;
+    out[o + M_STATE] = ch.car.state;
+    out[o + M_TIMBRE] = (ch.car.wave << T_CAR_WAVE) | (ch.mod.wave << T_MOD_WAVE) |
+      ((ch.additive ? 1 : 0) << T_ADDITIVE) | (ch.feedback << T_FEEDBACK);
+  }
+
+  #meterOperator(out, row, op, keyOn, note) {
+    const o = row * METER_STRIDE;
+    out[o + M_PEAK] = this.peaks[row] / MIX_SCALE;
+    out[o + M_MOD_DB] = -1;                    // one operator: nothing modulates it
+    out[o + M_NOTE] = note;
+    out[o + M_KEY_ON] = keyOn ? 1 : 0;
+    out[o + M_STATE] = op.state;
+    out[o + M_TIMBRE] = op.wave << T_CAR_WAVE;
+  }
+
+  /** An operator's standing attenuation in dB: envelope, level and key scale. */
+  #attenuationDb(op) {
+    return op.env * ENV_STEP_DB + (op.totalLevel + op.kslAtt) * TL_STEP_DB;
+  }
+
+  /** A channel's F-number and block read back as a MIDI note, or -1 if unset. */
+  #noteOf(ch) {
+    if (!ch.fnum) return -1;
+    const hz = ch.fnum * NATIVE_RATE / (1 << (20 - ch.block));
+    return 69 + 12 * Math.log2(hz / 440);
   }
 }

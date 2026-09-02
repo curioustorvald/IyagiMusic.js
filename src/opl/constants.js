@@ -24,6 +24,7 @@ export const NATIVE_RATE = CHIP_CLOCK_HZ / CLOCKS_PER_SAMPLE;
 
 export const ENV_MAX = 511;
 export const ENV_STEP_DB = 0.1875;
+export const TL_STEP_DB = 0.75;
 export const LOG_UNITS_PER_DB = 256 / Math.log10(2) / 20;   // ≈ 42.52
 export const ENV_TO_LOG = 8;
 export const TL_TO_LOG = 32;
@@ -66,3 +67,28 @@ export const RHYTHM_HH_OP = 17;    // channel 7 modulator
 export const RHYTHM_SD_OP = 20;    // channel 7 carrier
 export const RHYTHM_TOM_OP = 18;   // channel 8 modulator
 export const RHYTHM_TC_OP = 21;    // channel 8 carrier
+
+// ── Meter rows ────────────────────────────────────────────────────────────
+// What a display wants is one row per *voice*, which is not one row per
+// channel: in rhythm mode the chip's last three channels carry five
+// instruments between them. The rows are numbered the way the driver numbers
+// voices -- 0…8 melodic, or 0…5 plus bass drum, snare, tom, cymbal and hi-hat
+// -- so a caller can index a row with the same voice number it plays.
+
+export const METER_VOICES = 11;
+export const METER_STRIDE = 7;
+export const METER_BD = 6, METER_SD = 7, METER_TOM = 8, METER_TC = 9, METER_HH = 10;
+
+/** Fields of one meter row. */
+export const M_PEAK = 0;      // loudest |output| since the last read, ±1 scale
+export const M_MOD_DB = 1;    // modulator attenuation in dB; -1 where there is none
+export const M_NOTE = 2;      // MIDI note number, fractional; -1 where untuned
+export const M_KEY_ON = 3;
+export const M_STATE = 4;     // envelope phase of the voice's carrier
+export const M_VOLUME = 5;    // channel volume 0…127 -- the driver's, not the chip's
+export const M_TIMBRE = 6;    // packed, by the shifts below
+
+export const T_CAR_WAVE = 0, T_MOD_WAVE = 2, T_ADDITIVE = 4, T_FEEDBACK = 5;
+
+/** Chip-wide status bits, as `OPL2.chipFlags` reports them. */
+export const CF_RHYTHM = 1, CF_TREMOLO = 2, CF_VIBRATO = 4, CF_WAVESEL = 8;

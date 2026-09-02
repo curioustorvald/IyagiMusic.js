@@ -4,7 +4,7 @@
 // browser does. The Web Audio wiring lives in the frontend, not here.
 
 import { OPL2 } from "./opl/chip.js";
-import { NATIVE_RATE } from "./opl/constants.js";
+import { NATIVE_RATE, METER_VOICES, METER_STRIDE, M_VOLUME } from "./opl/constants.js";
 import {
   parseIms, parseRol, parseBnk, parseIss, resolvePatches, identify, deltaGcd,
   resolveIssSpans,
@@ -12,6 +12,13 @@ import {
 import { Sequencer, imsSequence, rolSequence } from "./sequencer.js";
 
 export { OPL2, NATIVE_RATE, parseIms, parseRol, parseBnk, parseIss, identify, deltaGcd };
+export {
+  METER_VOICES, METER_STRIDE, METER_BD, METER_SD, METER_TOM, METER_TC, METER_HH,
+  M_PEAK, M_MOD_DB, M_NOTE, M_KEY_ON, M_STATE, M_VOLUME, M_TIMBRE,
+  T_CAR_WAVE, T_MOD_WAVE, T_ADDITIVE, T_FEEDBACK,
+  CF_RHYTHM, CF_TREMOLO, CF_VIBRATO, CF_WAVESEL,
+  EG_OFF, EG_ATTACK, EG_DECAY, EG_SUSTAIN, EG_RELEASE,
+} from "./opl/constants.js";
 export { resolveIssSpans } from "./formats.js";
 export { decodeJohab, decodeJohabField } from "./johab2unicode.js";
 
@@ -111,6 +118,32 @@ export class IyagiMusic {
 
   /** Current tick, for lining lyrics up. */
   get tick() { return this.sequencer.tick; }
+
+  // ── what the player looks like from outside ─────────────────────────────
+
+  /** How many voices this song has: 9 melodic, or 6 melodic and 5 drums. */
+  get voiceCount() { return this.sequencer.driver.voiceCount; }
+
+  /** Chip-wide switches, as the CF_* bits. */
+  get chipFlags() { return this.chip.chipFlags; }
+
+  /** Bank patch names by voice, and a counter that moves when one changes. */
+  get patchNames() { return this.sequencer.voicePatchName; }
+  get patchEpoch() { return this.sequencer.patchEpoch; }
+
+  /** A buffer the right size for `readMeters`. */
+  static meterBuffer() { return new Float32Array(METER_VOICES * METER_STRIDE); }
+
+  /**
+   * Per-voice meter rows for a display; see `OPL2.readMeters`, which does most
+   * of it. Reading clears the peak accumulators, so call it once per frame.
+   */
+  readMeters(out) {
+    this.chip.readMeters(out);
+    const volume = this.sequencer.driver.voiceVolume;
+    for (let v = 0; v < METER_VOICES; v++) out[v * METER_STRIDE + M_VOLUME] = volume[v];
+    return out;
+  }
 
   reset() {
     this.chip.reset();

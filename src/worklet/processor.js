@@ -15,6 +15,10 @@ class IyagiProcessor extends AudioWorkletProcessor {
     this.playing = false;
     this.lastReport = 0;
     this.mono = new Float32Array(128);
+    // One meter buffer for the life of the processor: postMessage copies it,
+    // so it can be refilled every frame without allocating on the audio thread.
+    this.meter = IyagiMusic.meterBuffer();
+    this.patchEpoch = -1;
     this.port.onmessage = (e) => this.#command(e.data);
   }
 
@@ -32,6 +36,7 @@ class IyagiProcessor extends AudioWorkletProcessor {
           });
           this.music.loop = !!msg.loop;
           this.playing = false;
+          this.patchEpoch = -1;
           this.port.postMessage({
             type: "loaded",
             kind: this.music.kind,
@@ -40,12 +45,16 @@ class IyagiProcessor extends AudioWorkletProcessor {
             lyrics: this.music.lyrics,
             tickBeat: this.music.song.tickBeat,
           });
+          // One frame of chip status right away, so a display can lay itself
+          // out for the right number of voices before anything is played.
+          this.#report(true);
         } catch (err) {
           this.music = null;
           this.port.postMessage({ type: "error", message: String(err && err.message || err) });
         }
         break;
       case "play": this.playing = !!this.music; break;
+      case "meters": this.#report(true); break;
       case "pause": this.playing = false; break;
       case "stop":
         this.playing = false;
@@ -62,12 +71,22 @@ class IyagiProcessor extends AudioWorkletProcessor {
     if (!this.music) return;
     if (!force && currentTime - this.lastReport < REPORT_INTERVAL) return;
     this.lastReport = currentTime;
-    this.port.postMessage({
+    const msg = {
       type: "position",
       seconds: this.music.seconds,
       tick: this.music.tick,
       ended: this.music.ended,
-    });
+      meter: this.music.readMeters(this.meter),
+      voices: this.music.voiceCount,
+      chipFlags: this.music.chipFlags,
+    };
+    // Patch names change a handful of times in a whole song; send them only
+    // when they have.
+    if (this.music.patchEpoch !== this.patchEpoch) {
+      this.patchEpoch = this.music.patchEpoch;
+      msg.patchNames = this.music.patchNames.slice();
+    }
+    this.port.postMessage(msg);
   }
 
   process(inputs, outputs) {

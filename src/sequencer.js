@@ -49,6 +49,11 @@ export class Sequencer {
     this.sampleCursor = 0;      // fractional samples owed before the next event
     this.samplesRendered = 0;
     this.ended = false;
+    // What each voice is currently set to, for anything showing the player
+    // its own state. The epoch saves a display from diffing eleven strings a
+    // frame when patch changes are a handful an entire song.
+    this.voicePatchName = new Array(11).fill("");
+    this.patchEpoch = (this.patchEpoch | 0) + 1;   // never repeats, so a reset shows
   }
 
   /** Seconds per tick at the current tempo. */
@@ -79,7 +84,13 @@ export class Sequencer {
         // IMS carries an index into the song's patch table; ROL has already
         // resolved a name to the patch itself.
         const patch = typeof ev.patch === "number" ? this.patches[ev.patch] : ev.patch;
-        if (patch) d.setVoiceTimbre(ev.voice, patch);
+        if (!patch) break;
+        d.setVoiceTimbre(ev.voice, patch);
+        const name = patch.name ?? "";
+        if (this.voicePatchName[ev.voice] !== name) {
+          this.voicePatchName[ev.voice] = name;
+          this.patchEpoch++;
+        }
         break;
       }
       case BEND:
