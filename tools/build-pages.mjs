@@ -15,11 +15,15 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const pages = path.resolve(root, "../github-pages");
+// The Cloudflare Pages project directory, which is what the browser loads.
+// (Before commit 1d529d2 the deployed tree was the repo root; writing there
+// now just leaves an unused second copy behind.)
+const pages = path.resolve(root, "../github-pages/iyagimusic-worker");
 
 /** Bundle order: every module before the ones that use it. */
 const FILES = [
   "src/johab-symbols.js",
+  "src/user-glyphs.js",
   "src/johab2unicode.js",
   "src/fnum-table.js",
   "src/opl/constants.js",

@@ -10,7 +10,7 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
-const BUNDLE = path.resolve(repo, "../github-pages/iyagi-processor.bundle.js");
+const BUNDLE = path.resolve(repo, "../github-pages/iyagimusic-worker/iyagi-processor.bundle.js");
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
 const have = fs.existsSync(BUNDLE);
 

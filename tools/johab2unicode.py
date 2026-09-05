@@ -7,7 +7,9 @@ is actually used by Iyagi music files.  See docs/JOHAB_ENCODING.en.md.
 CPython ships a ``johab`` codec that covers the same ground for the standard
 part of the encoding, and the test suite uses it as an oracle.  This module
 exists so that converters do not depend on it, and so that the user-defined
-glyph area can be handled explicitly.
+glyph area can be handled explicitly: those codes are Iyagi's own font rather
+than any standard, so the codec rejects them and we map them from
+``tools/iyagi_user_area.tsv`` instead.
 """
 from __future__ import annotations
 
@@ -15,8 +17,10 @@ import sys
 
 try:
     from .johab_symbols import JOHAB_SYMBOL_TABLE
+    from .user_glyphs import USER_GLYPH_FIRST, USER_GLYPH_TABLE
 except ImportError:                                  # run as a plain script
     from johab_symbols import JOHAB_SYMBOL_TABLE
+    from user_glyphs import USER_GLYPH_FIRST, USER_GLYPH_TABLE
 
 __all__ = [
     "decode_johab", "decode_johab_field", "johab_char_from_code",
@@ -67,6 +71,13 @@ def johab_char_from_code(code: int) -> str | None:
         if cho_fill and jung_fill and jong > 1:
             return _JONG_COMPAT[jong - 2]
         return None
+    # Iyagi's own glyphs, which are the ISPC.FNT graphics font addressed by the
+    # trail byte.  Only the one lead byte is populated; the rest of the user
+    # area is unassigned, here and in the corpus.  See JOHAB_ENCODING section 5.
+    glyph_index = code - USER_GLYPH_FIRST
+    if 0 <= glyph_index < len(USER_GLYPH_TABLE):
+        glyph = USER_GLYPH_TABLE[glyph_index]
+        return chr(glyph) if glyph else None
     if 0xD9 <= lead <= 0xDE:
         lead_index = lead - 0xD9
     elif 0xE0 <= lead <= 0xF9:

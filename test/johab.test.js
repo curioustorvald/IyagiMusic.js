@@ -23,10 +23,24 @@ test("decodes the symbol and hanja area", () => {
   assert.equal(johabCharFromCode(0xdda4), "い");
 });
 
-test("rejects the user-defined glyph area", () => {
-  assert.equal(johabCharFromCode(0xd4dc), null);
-  assert.equal(decodeJohab(hex("d4dc")), "�");
+test("decodes Iyagi's own font glyphs", () => {
+  // The trail byte is the glyph number in ISPC.FNT, whose repertoire is
+  // CP437's: 0xDC is the lower half block, 0x90 the right-pointing pointer.
+  assert.equal(johabCharFromCode(0xd4dc), "▄");
+  assert.equal(johabCharFromCode(0xd490), "►");
+  assert.equal(decodeJohab(hex("d4dc")), "▄");
+  // Two of the glyphs have no BMP equivalent: the 하늘소 ox and the bubble.
+  assert.equal(johabCharFromCode(0xd480), "🐂");
+  assert.equal([...decodeJohab(hex("d480d4ff"))].join(" "), "🐂 🫧");
+  // A caller that would rather keep the codes distinguishable still can.
   assert.equal(decodeJohab(hex("d4dc"), { userGlyph: () => "*" }), "*");
+});
+
+test("leaves the rest of the user area unassigned", () => {
+  assert.equal(johabCharFromCode(0xd47f), null);
+  assert.equal(johabCharFromCode(0xd500), null);
+  assert.equal(johabCharFromCode(0xd8ff), null);
+  assert.equal(decodeJohab(hex("d500")), "�");
 });
 
 test("stops at NUL and passes ASCII through", () => {

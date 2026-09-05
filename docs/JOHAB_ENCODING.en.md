@@ -130,11 +130,30 @@ line, or interleaved between the characters of a name as separators.
 *(measured: 12 624 occurrences over 84 distinct codes, 60 of them under lead
 byte `0xD4`; 4.6% of all two-byte codes in the corpus text.)*
 
-There is no mapping for these — the glyphs only exist in Iyagi's font. A
-decoder should hand them to the caller rather than guess. `decodeJohab()`
-takes a `userGlyph` callback for exactly this, so that a player which does
-have the font (or a plausible Unicode stand-in for each glyph) can supply one,
-and everything else gets U+FFFD.
+The glyphs are `ISPC.FNT`, the graphics font Iyagi ships, and the trail byte
+is the glyph number: **`0xD4tt` draws glyph `tt − 0x80`**, so the assigned
+codes are `0xD480`–`0xD4FF` and the rest of the area is empty. The repertoire
+is IBM CP437's, which is what a BBS terminal wants — the ANSI-art box pieces,
+shading blocks and dingbats, re-encoded so that an eight-bit byte which is not
+half of a Johab pair still has a two-byte home in the stored text. Twenty of
+the 128 slots are Iyagi's own rather than CP437's: the 하늘소 ox at `0xD480`,
+sixteen cursive Greek letters and marks at `0xD4A0`–`0xD4AF`, a filled circle,
+a boxed ↵ used as a line-continuation mark, and a bubble.
+
+`tools/iyagi_user_area.tsv` holds the mapping — one row per code, with the
+CP437 byte, the Unicode equivalent and the corpus count — and
+`tools/gen_user_glyphs.py` turns it into the table both implementations read.
+Where the font and its addressing came from is written up outside this repo,
+in the workspace's `iyagi_for_windows/docs/KSR_FONT.en.md`.
+
+The Unicode equivalents are a judgement about what each glyph *is*, not a
+standard, and they are not unique: **69 of the 128 characters are also
+reachable through a KS X 1001 symbol code** (♥ is both `0xD483` and `0xD9BE`),
+and two codes draw the same letter (ε is both `0xD4A0` and `0xD4EE`). So these
+codes can be read, but a round trip through Unicode cannot recover which code
+a file held. Anything that has to keep the bytes — an editor, a converter —
+should pass `decodeJohab()` a `userGlyph` callback and map the codes somewhere
+private of its own, which is what the ISS studio does.
 
 Outside that area the corpus holds 24 more undecodable codes, 84 occurrences
 in total: unassigned jamo combinations in the Hangul range, unassigned KS X
@@ -173,11 +192,15 @@ almost all of them:
   narrow in a Western context, two cells on the screen that actually drew them.
 
 A decoder's own substitutions inherit the width of the code they replace, not
-the width of the character they borrow. Both of the characters these decoders
-invent — the stand-in a `userGlyph` callback returns for §5's font glyphs, and
-the U+FFFD used when there is none — replace a two-byte code and therefore
-occupy two cells, whatever a font makes of them. `IyagiMusic`'s default
-stand-in is a middle dot, U+00B7: one narrow-looking character, two cells.
+the width of the character they borrow. U+FFFD, and whatever stand-in a
+`userGlyph` callback returns for §5's font glyphs, both replace a two-byte
+code and therefore occupy two cells, whatever a font makes of them — the ISS
+studio's private-use stand-ins included.
+
+Two of §5's glyphs decode above the BMP, the ox and the bubble. They are one
+character from one two-byte code and so are two cells, not four, which is a
+statement about walking the string as well: step it by code point, or a
+surrogate pair counts twice and an index can land between its halves.
 
 *(measured: over the 696 corpus `.iss` files, counting cells this way agrees
 with the files' own byte counts on all 41 849 screen lines. Counting them by

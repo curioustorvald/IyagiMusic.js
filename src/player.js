@@ -38,9 +38,10 @@ export class IyagiMusic {
    * @param {Uint8Array} [opts.lyrics]       .iss bytes
    * @param {number} [opts.sampleRate]       output rate; default 48000
    * @param {(code:number)=>string|null} [opts.userGlyph]
-   *   what to show for Iyagi's own font glyphs (JOHAB_ENCODING §5). They are
-   *   decorative separators and brackets, so a middle dot reads better than a
-   *   row of replacement characters; pass null to see them as U+FFFD instead.
+   *   overrides the built-in mapping for Iyagi's own font glyphs
+   *   (JOHAB_ENCODING §5). They decode to their Unicode equivalents now, so
+   *   this is only for callers that would rather keep the codes
+   *   distinguishable -- an editor round-tripping the bytes, say.
    */
   constructor(opts) {
     const kind = identify(opts.song);
@@ -49,8 +50,7 @@ export class IyagiMusic {
     }
     this.kind = kind;
     this.sampleRate = opts.sampleRate ?? 48000;
-    const glyph = opts.userGlyph === undefined ? () => "\u00b7" : opts.userGlyph;
-    this.textOptions = glyph ? { userGlyph: glyph } : undefined;
+    this.textOptions = opts.userGlyph ? { userGlyph: opts.userGlyph } : undefined;
     this.bank = opts.bank ? parseBnk(opts.bank) : null;
     this.fallbackBank = opts.fallbackBank ? parseBnk(opts.fallbackBank) : null;
     this.lyrics = opts.lyrics ? parseIss(opts.lyrics, this.textOptions) : null;

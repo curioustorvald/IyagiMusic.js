@@ -15,6 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 from johab2unicode import decode_johab, johab_char_from_code  # noqa: E402
+from user_glyphs import USER_GLYPH_FIRST, USER_GLYPH_TABLE  # noqa: E402
 
 
 class TestJohab(unittest.TestCase):
@@ -27,6 +28,13 @@ class TestJohab(unittest.TestCase):
             except UnicodeDecodeError:
                 want = None
             got = johab_char_from_code(code)
+            if USER_GLYPH_FIRST <= code < USER_GLYPH_FIRST + len(USER_GLYPH_TABLE):
+                # Iyagi's own font glyphs.  The codec cannot know these -- they
+                # are not in the standard at all -- and we map them anyway, so
+                # the oracle's silence here is the expected answer.
+                self.assertIsNone(want, hex(code))
+                self.assertIsNotNone(got, hex(code))
+                continue
             if want != got:
                 bad.append((hex(code), want, got))
         self.assertEqual(bad, [])
@@ -37,7 +45,9 @@ class TestJohab(unittest.TestCase):
             "검은 고양이 네로")
         self.assertEqual(johab_char_from_code(0x8841), "ㄱ")
         self.assertEqual(johab_char_from_code(0x8441), "　")
-        self.assertIsNone(johab_char_from_code(0xD4DC))
+        self.assertEqual(johab_char_from_code(0xD4DC), "▄")
+        self.assertEqual(johab_char_from_code(0xD480), "\U0001F402")
+        self.assertIsNone(johab_char_from_code(0xD500))
 
     def test_javascript_twin_agrees(self):
         script = """

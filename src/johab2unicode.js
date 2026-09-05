@@ -3,8 +3,14 @@
 // Covers the encoding as it is actually used by Iyagi music files: ASCII
 // passthrough, the bit-packed Hangul syllable area, the symbol/hanja area,
 // and Iyagi's user-defined glyph area.  See docs/JOHAB_ENCODING.en.md.
+//
+// The user-defined glyphs are Iyagi's own font rather than any standard, so
+// their Unicode equivalents are a judgement about what each glyph *is* -- see
+// tools/iyagi_user_area.tsv, which records the font it came out of alongside
+// each decision.
 
 import { JOHAB_SYMBOL_TABLE } from "./johab-symbols.js";
+import { USER_GLYPH_FIRST, USER_GLYPH_TABLE } from "./user-glyphs.js";
 
 // Bit-field slot numbers, 0 where the slot is unassigned.  Index by the
 // 5-bit field value; the payload is the jamo's index in the Unicode
@@ -56,6 +62,14 @@ export function johabCharFromCode(code) {
     if (choFill && jungFill && jong > 1) return JONG_COMPAT[jong - 2];
     return null;
   }
+  // Iyagi's own glyphs, which are the ISPC.FNT graphics font addressed by the
+  // trail byte.  Only the one lead byte is populated; the rest of the user
+  // area is unassigned, here and in the corpus.  See JOHAB_ENCODING section 5.
+  const glyphIndex = code - USER_GLYPH_FIRST;
+  if (glyphIndex >= 0 && glyphIndex < USER_GLYPH_TABLE.length) {
+    const glyph = USER_GLYPH_TABLE[glyphIndex];
+    return glyph ? String.fromCodePoint(glyph) : null;
+  }
   let leadIndex = -1;
   if (lead >= 0xd9 && lead <= 0xde) leadIndex = lead - 0xd9;
   else if (lead >= 0xe0 && lead <= 0xf9) leadIndex = lead - 0xe0 + 6;
@@ -76,7 +90,8 @@ export function johabCharFromCode(code) {
  * @param {object} [options]
  * @param {string} [options.replacement="�"] stand-in for undecodable codes
  * @param {(code:number)=>(string|null)} [options.userGlyph] called for codes in
- *   the user-defined area (0xD400-0xD8FF) before the replacement is used
+ *   the user-defined area (0xD400-0xD8FF) ahead of the built-in mapping, for
+ *   callers that would rather keep those codes distinguishable than read them
  * @param {boolean} [options.stopAtNul=true] stop at the first 0x00
  * @returns {string}
  */
