@@ -142,7 +142,49 @@ in total: unassigned jamo combinations in the Hangul range, unassigned KS X
 are encoder slips in individual files, not a second glyph area — two song
 titles carry one apiece, in the middle of otherwise clean Japanese text.
 
-## 6. Implementations
+## 6. Character cells
+
+On the text screen these files were written for, **a one-byte code occupies one
+cell and a two-byte code occupies two**. That is the whole rule, and ISS
+highlight records count in exactly those cells (FILE_FORMATS §4.2).
+
+Decoding throws that information away: a Unicode string no longer remembers how
+many bytes a character arrived as. It can be recovered from the code point
+alone, because the two byte lengths land in disjoint ranges —
+
+```
+two cells  ⟺  code point >= U+0080
+```
+
+— and that is exact, not a heuristic. No two-byte code decodes to anything
+below U+0080, and every one-byte code is ASCII by construction; checked over
+all 65 536 two-byte codes and all 128 one-byte codes.
+
+The tempting alternative is Unicode's East Asian Width property, and it is a
+different question with a different answer. It describes how a modern font
+lays a character out, not how many cells a DOS screen gave it, and it disagrees
+on **470 of the 17 065 assigned two-byte codes**. Two groups account for
+almost all of them:
+
+- the KS X 1001 symbol rows below U+2E80 — `·` `‥` `…` `―` `※` `☆` `★` `○`
+  `■` `◁` `▶` `▒` `♥` `♪` `→`, the box-drawing set, circled and parenthesised
+  letters, and the mathematical operators;
+- Greek and Cyrillic, which Unicode classes as East Asian *Ambiguous* —
+  narrow in a Western context, two cells on the screen that actually drew them.
+
+A decoder's own substitutions inherit the width of the code they replace, not
+the width of the character they borrow. Both of the characters these decoders
+invent — the stand-in a `userGlyph` callback returns for §5's font glyphs, and
+the U+FFFD used when there is none — replace a two-byte code and therefore
+occupy two cells, whatever a font makes of them. `IyagiMusic`'s default
+stand-in is a middle dot, U+00B7: one narrow-looking character, two cells.
+
+*(measured: over the 696 corpus `.iss` files, counting cells this way agrees
+with the files' own byte counts on all 41 849 screen lines. Counting them by
+East Asian Width instead disagreed on 6144 lines in 567 files, which put 19 216
+highlight records on the wrong characters.)*
+
+## 7. Implementations
 
 - `src/johab2unicode.js` — ES module, no dependencies
 - `tools/johab2unicode.py` — Python 3, no dependencies, also usable as a CLI

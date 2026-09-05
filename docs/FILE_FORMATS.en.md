@@ -479,5 +479,11 @@ Fixed 64-byte NUL-padded text lines, Johab-encoded, laid out as text-mode
 screen rows. Widths are in **character cells**: a Hangul syllable is two
 cells, which is what `startX` and `widthX` count.
 
+The general rule is by byte length, not by script — one byte is one cell, two
+bytes are two — so every symbol, box-drawing character and Greek or Cyrillic
+letter in the text is two cells as well. A reader holding decoded text rather
+than the original bytes recovers this from the code point; JOHAB_ENCODING §6
+gives the rule and the ways of getting it wrong.
+
 `154 + 5 * recCount + 64 * lineCount` equals the file size exactly for all 680
 corpus files *(measured)*.
