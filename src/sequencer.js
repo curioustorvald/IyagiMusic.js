@@ -12,16 +12,35 @@ import { NATIVE_RATE } from "./opl/constants.js";
 export const NOTE_ON = 0, NOTE_OFF = 1, VOLUME = 2, PATCH = 3, BEND = 4,
   TEMPO = 5, END = 6;
 
+/** @typedef {import("./formats.js").Patch} Patch */
+
+/**
+ * One instruction for the driver, at an absolute tick. Both formats reduce to
+ * this: `type` says which of the constants above it is, and the rest of the
+ * fields are whichever that kind uses.
+ *
+ * @typedef {object} SeqEvent
+ * @property {number} tick
+ * @property {number} type one of NOTE_ON..END
+ * @property {number} [voice]
+ * @property {number} [note] MIDI note number
+ * @property {number} [volume] 0..127
+ * @property {number|Patch} [patch] an index into `patches` (IMS) or the patch itself (ROL)
+ * @property {number} [bend] 14-bit, 0x2000 centred
+ * @property {number} [tempo] beats per minute
+ * @property {number} [order] tie-break within a tick, for ROL's parallel tracks
+ */
+
 export class Sequencer {
   /**
    * @param {object} opts
    * @param {{write(reg:number,value:number):void}} opts.chip
-   * @param {Iterable<object>} opts.events  absolute-tick events, in order
+   * @param {Iterable<SeqEvent>} opts.events  absolute-tick events, in order
    * @param {number} opts.tickBeat          ticks per beat
    * @param {number} opts.tempo             beats per minute
    * @param {boolean} opts.percussive
    * @param {number} [opts.pitchRange]
-   * @param {Array} [opts.patches]          resolved bank patches, by index
+   * @param {(Patch|null)[]} [opts.patches] resolved bank patches, by index
    * @param {number} [opts.sampleRate]      defaults to the chip's native rate
    */
   constructor(opts) {
@@ -42,17 +61,22 @@ export class Sequencer {
     this.driver.reset();
     this.driver.setMode(this.percussive);
     this.driver.setPitchRange(this.pitchRange);
+    /** @type {number} */
     this.tempo = this.baseTempo;
     this.iterator = this.makeEvents[Symbol.iterator]();
     this.pending = this.iterator.next();
+    /** @type {number} */
     this.tick = 0;
     this.sampleCursor = 0;      // fractional samples owed before the next event
     this.samplesRendered = 0;
+    /** @type {boolean} */
     this.ended = false;
     // What each voice is currently set to, for anything showing the player
     // its own state. The epoch saves a display from diffing eleven strings a
     // frame when patch changes are a handful an entire song.
+    /** @type {string[]} */
     this.voicePatchName = new Array(11).fill("");
+    /** @type {number} */
     this.patchEpoch = (this.patchEpoch | 0) + 1;   // never repeats, so a reset shows
   }
 
@@ -135,6 +159,11 @@ export class Sequencer {
    * Render `count` samples of the song into `out` at `offset`.
    * Returns the number of samples actually written -- short only at the end
    * of a non-looping song.
+   *
+   * @param {Float32Array} out
+   * @param {number} offset
+   * @param {number} count
+   * @returns {number}
    */
   render(out, offset, count) {
     let written = 0;
@@ -160,7 +189,11 @@ export class Sequencer {
   }
 }
 
-/** Flatten an IMS song into sequencer events. §1.4 of the formats doc. */
+/**
+ * Flatten an IMS song into sequencer events. §1.4 of the formats doc.
+ * @param {import("./formats.js").ImsSong} song
+ * @returns {Generator<SeqEvent, void, undefined>}
+ */
 export function* imsSequence(song) {
   const melodicOnly = !song.percussive;
   for (const ev of imsEvents(song)) {
@@ -203,6 +236,10 @@ export function* imsSequence(song) {
  * Flatten a ROL song into sequencer events. §3 of the formats doc.
  * `resolve` maps an instrument name to a bank patch; unresolved names are
  * dropped rather than silencing the voice.
+ *
+ * @param {import("./formats.js").RolSong} song
+ * @param {(name: string) => (Patch|null)} resolve
+ * @returns {SeqEvent[]}
  */
 export function rolSequence(song, resolve) {
   const out = [];

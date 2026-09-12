@@ -79,14 +79,23 @@ export class AdlibDriver {
     this.voiceKeyOn = new Int32Array(9);
     this.voiceBend = new Int32Array(9).fill(MID_PITCH);
     this.bxCache = new Int32Array(9);
+    /** @type {Int32Array} per-voice volume 0..127, eleven wide for rhythm mode */
     this.voiceVolume = new Int32Array(11).fill(MAX_VOLUME);
+    /** @type {number} */
     this.percBits = 0;
+    /** @type {boolean} */
     this.percussion = false;
+    /** @type {number} 9 melodic, or 11 in rhythm mode */
     this.voiceCount = 9;
+    /** @type {number} */
     this.amDepth = 0;
+    /** @type {number} */
     this.vibDepth = 0;
+    /** @type {number} */
     this.noteSelect = 0;
+    /** @type {number} */
     this.pitchRange = 1;
+    /** @type {boolean} */
     this.waveSelect = true;
     for (const p of this.slotParams) p.fill(0);
 
@@ -96,7 +105,7 @@ export class AdlibDriver {
     this.setWaveSelect(true);
   }
 
-  /** §6. `percussive` true puts the chip in rhythm mode. */
+  /** §6. `percussive` true puts the chip in rhythm mode. @param {boolean} percussive */
   setMode(percussive) {
     if (percussive) {
       this.voiceNote[TOM] = TOM_PITCH;
@@ -113,24 +122,30 @@ export class AdlibDriver {
     this.#sendAmVibRhythm();
   }
 
+  /** @param {boolean} on */
   setWaveSelect(on) {
     this.waveSelect = !!on;
     for (let s = 0; s < 18; s++) this.chip.write(0xe0 + SLOT_OFFSET[s], 0);
     this.chip.write(0x01, on ? 0x20 : 0);
   }
 
-  /** §5.2. Clamped into 1…12 semitones, as the driver does. */
+  /** §5.2. Clamped into 1…12 semitones, as the driver does. @param {number} semitones */
   setPitchRange(semitones) {
     this.pitchRange = Math.min(12, Math.max(1, semitones | 0));
   }
 
+  /**
+   * @param {number} amDepth @param {number} vibDepth @param {number} noteSelect
+   */
   setGlobalParams(amDepth, vibDepth, noteSelect) {
     this.amDepth = amDepth; this.vibDepth = vibDepth; this.noteSelect = noteSelect;
     this.#sendAmVibRhythm();
     this.chip.write(0x08, noteSelect ? 0x40 : 0);
   }
 
-  /** §3. Load a parsed bank patch into a voice. */
+  /** §3. Load a parsed bank patch into a voice.
+   * @param {number} voice @param {import("./formats.js").Patch} patch
+   */
   setVoiceTimbre(voice, patch) {
     if (voice >= this.voiceCount) return;
     const slots = this.#slotsOf(voice);
@@ -140,7 +155,9 @@ export class AdlibDriver {
     }
   }
 
-  /** §4. Channel volume, 0…127. */
+  /** §4. Channel volume, 0…127.
+   * @param {number} voice @param {number} volume 0..127
+   */
   setVoiceVolume(voice, volume) {
     if (voice >= this.voiceCount) return;
     this.voiceVolume[voice] = Math.min(MAX_VOLUME, volume | 0);
@@ -149,7 +166,9 @@ export class AdlibDriver {
     if (slots[1] !== 255) this.#sendKslLevel(slots[1]);
   }
 
-  /** §5. 14-bit bend, 0x2000 is centre. Melodic voices and the bass drum. */
+  /** §5. 14-bit bend, 0x2000 is centre. Melodic voices and the bass drum.
+   * @param {number} voice @param {number} bend 14-bit, 0x2000 centred
+   */
   setVoicePitch(voice, bend) {
     if ((!this.percussion && voice < 9) || voice <= BD) {
       this.voiceBend[voice] = Math.min(0x3fff, Math.max(0, bend | 0));
@@ -157,7 +176,9 @@ export class AdlibDriver {
     }
   }
 
-  /** §7. `note` is a MIDI note number. */
+  /** §7. `note` is a MIDI note number.
+   * @param {number} voice @param {number} note MIDI note number
+   */
   noteOn(voice, note) {
     let pitch = note - MIDI_TO_CHIP;
     if (pitch < 0) pitch = 0;
@@ -181,7 +202,9 @@ export class AdlibDriver {
     }
   }
 
-  /** §7. */
+  /** §7.
+   * @param {number} voice
+   */
   noteOff(voice) {
     if ((!this.percussion && voice < 9) || voice < BD) {
       this.voiceKeyOn[voice] = 0;

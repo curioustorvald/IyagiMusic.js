@@ -10,7 +10,10 @@ import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
-const BUNDLE = path.resolve(repo, "../github-pages/iyagimusic-worker/iyagi-processor.bundle.js");
+// `npm test` rebuilds this first (the `pretest` script), so these two run
+// rather than skipping. A bare `node --test` on a tree that has never been
+// built still skips.
+const BUNDLE = path.resolve(repo, "dist/iyagi-processor.bundle.js");
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
 const have = fs.existsSync(BUNDLE);
 

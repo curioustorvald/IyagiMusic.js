@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // Render an .ims or .rol to a 16-bit WAV, for listening and for regression
-// checks. Usage:  node tools/render.mjs song.ims [bank.bnk] [out.wav] [seconds]
+// checks. The package's one executable; `npx iyagi-render` reaches it without
+// a checkout. Usage:  iyagi-render song.ims [bank.bnk] [out.wav] [seconds]
 import fs from "node:fs";
 import path from "node:path";
 import { IyagiMusic } from "../src/player.js";
 
 const [song, bank, out = "out.wav", seconds = "30"] = process.argv.slice(2);
 if (!song) {
-  console.error("usage: render.mjs <song.ims|.rol> [bank.bnk] [out.wav] [seconds]");
+  console.error("usage: iyagi-render <song.ims|.rol> [bank.bnk] [out.wav] [seconds]");
   process.exit(1);
 }
 const read = (p) => (p && fs.existsSync(p) ? new Uint8Array(fs.readFileSync(p)) : undefined);

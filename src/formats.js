@@ -4,6 +4,9 @@
 
 import { decodeJohabField } from "./johab2unicode.js";
 
+/** @typedef {import("./johab2unicode.js").DecodeOptions} DecodeOptions */
+/** Anything the readers will take: the bytes of a file. @typedef {Uint8Array|ArrayBufferView|ArrayBuffer} Bytes */
+
 const IMS_HEADER_SIZE = 70;
 const BNK_NAME_RECORD_SIZE = 12;
 const BNK_PATCH_RECORD_SIZE = 30;
@@ -12,6 +15,121 @@ const ISS_RECORD_SIZE = 5;
 const ISS_LINE_SIZE = 64;
 
 export class FormatError extends Error {}
+
+/* ---------------------------------------------------------------- shapes */
+// The readers return plain objects, and these say what is in them. Field for
+// field they are the file, not a model of it: where the format has a number
+// the object has that number, and §-references in the comments above each
+// reader point at the bytes it came from.
+
+/**
+ * One FM operator's parameters, straight out of a BNK patch record. §2.3.
+ * @typedef {object} Operator
+ * @property {number} ksl @property {number} multiple @property {number} feedback
+ * @property {number} attack @property {number} sustain @property {number} eg
+ * @property {number} decay @property {number} release @property {number} totalLevel
+ * @property {number} am @property {number} vib @property {number} ksr
+ * @property {number} connection
+ */
+
+/**
+ * A named instrument: two operators and their waveform selects. §2.3.
+ * @typedef {object} Patch
+ * @property {string} name
+ * @property {Operator} modulator
+ * @property {Operator} carrier
+ * @property {number} modWave
+ * @property {number} carWave
+ */
+
+/**
+ * An AdLib instrument bank. §2.
+ * @typedef {object} Bank
+ * @property {number[]} version major and minor
+ * @property {number} used @property {number} count
+ * @property {number} offsetName @property {number} offsetData
+ * @property {Patch[]} patches in name-record order
+ * @property {Map<string, Patch>} byName keyed by upper-case name; §1.6
+ */
+
+/**
+ * An IMS song. The event stream is left as raw bytes -- walk it with
+ * `imsEvents`. §1.
+ * @typedef {object} ImsSong
+ * @property {number[]} version
+ * @property {string} title already Johab-decoded
+ * @property {number} tickBeat @property {number} beatMeasure
+ * @property {number} totalTick advisory; §1.5 -- FC is what ends the song
+ * @property {number} commandCount
+ * @property {number} srcTickBeat the source ROL's tickBeat, or 0; §1.8
+ * @property {boolean} percussive
+ * @property {number} pitchRange semitones, clamped to 1..12
+ * @property {number} tempo
+ * @property {Uint8Array} events
+ * @property {string[]} patchNames one per voice slot; resolve with `resolvePatches`
+ */
+
+/**
+ * One event off an IMS stream. `status` is the full status byte; `a` and `b`
+ * are the data bytes it actually uses.
+ * @typedef {object} ImsEvent
+ * @property {number} tick absolute, in ticks
+ * @property {number} delay ticks since the previous event
+ * @property {number} status
+ * @property {number} a @property {number} b
+ */
+
+/** @typedef {{tick: number, multiplier: number}} RolTempoEvent */
+/** @typedef {{tick: number, note: number, duration: number}} RolNote */
+/** @typedef {{tick: number, name: string, unknown: number}} RolTimbre */
+/** @typedef {{tick: number, volume: number}} RolVolume */
+/** @typedef {{tick: number, pitch: number}} RolPitch */
+
+/**
+ * One of a ROL's eleven voices. §3.
+ * @typedef {object} RolVoice
+ * @property {string} name
+ * @property {RolNote[]} notes
+ * @property {RolTimbre[]} timbres
+ * @property {RolVolume[]} volumes
+ * @property {RolPitch[]} pitches
+ * @property {number} [tickCount]
+ * @property {string} [timbreName] @property {string} [volumeName] @property {string} [pitchName]
+ */
+
+/**
+ * An AdLib Visual Composer song. §3.
+ * @typedef {object} RolSong
+ * @property {number[]} version
+ * @property {string} title free text in practice; Korean files put Johab here
+ * @property {number} tickBeat @property {number} beatMeasure
+ * @property {number} scaleY @property {number} scaleX
+ * @property {boolean} percussive isMelodic is INVERTED versus IMS; §1.1
+ * @property {number[]|null} counters
+ * @property {RolVoice[]} voices always eleven
+ * @property {{name: string, tempo: number, events: RolTempoEvent[]}} [tempoTrack]
+ * @property {number} [bytesRead]
+ */
+
+/**
+ * One lyric cue: the right edge of a highlight, not an isolated run. §4.2.
+ * @typedef {object} IssCue
+ * @property {number} tick already multiplied back up by 8
+ * @property {number} line @property {number} startX @property {number} widthX
+ */
+
+/**
+ * Timed lyrics. §4.
+ * @typedef {object} Iss
+ * @property {string} signature
+ * @property {string} writer @property {string} composer
+ * @property {string} singer @property {string} editor
+ * @property {string[]} lines 64-cell text lines, Johab-decoded
+ * @property {IssCue[]} cues sorted by tick
+ */
+
+/** A resolved highlight, in character cells. @typedef {{line: number, from: number, to: number}} IssSpan */
+
 
 const asBytes = (d) =>
   d instanceof Uint8Array ? d : new Uint8Array(d.buffer ?? d, d.byteOffset ?? 0, d.byteLength ?? d.length);
@@ -28,7 +146,11 @@ function text(bytes, from, len, options) {
 
 /* ------------------------------------------------------------------ BNK */
 
-/** Parse an AdLib instrument bank.  §2. */
+/**
+ * Parse an AdLib instrument bank.  §2.
+ * @param {Bytes} data
+ * @returns {Bank}
+ */
 export function parseBnk(data) {
   const b = asBytes(data);
   if (b.length < 20) throw new FormatError("BNK too short");
@@ -72,13 +194,14 @@ const OPERATOR_FIELDS = [
   "decay", "release", "totalLevel", "am", "vib", "ksr", "connection",
 ];
 
+/** @returns {Operator} */
 function readOperator(b, o) {
   const op = {};
   for (let i = 0; i < OPERATOR_FIELDS.length; i++) op[OPERATOR_FIELDS[i]] = b[o + i];
   return op;
 }
 
-/** One 30-byte patch record.  §2.3. */
+/** One 30-byte patch record.  §2.3.  @returns {Patch} */
 function readPatch(b, o, name) {
   return {
     name,
@@ -93,7 +216,12 @@ function readPatch(b, o, name) {
 
 /* ------------------------------------------------------------------ IMS */
 
-/** Parse an IMS song.  §1.  The event stream is left as raw bytes. */
+/**
+ * Parse an IMS song.  §1.  The event stream is left as raw bytes.
+ * @param {Bytes} data
+ * @param {DecodeOptions} [options] how to read the Johab title
+ * @returns {ImsSong}
+ */
 export function parseIms(data, options) {
   const b = asBytes(data);
   if (b.length < IMS_HEADER_SIZE) throw new FormatError("IMS too short");
@@ -133,6 +261,9 @@ export function parseIms(data, options) {
 /**
  * Resolve an IMS song's patch names against banks, most specific first.
  * Returns one entry per name, null where nothing matched.  §1.6.
+ * @param {ImsSong} song
+ * @param {...(Bank|null|undefined)} banks
+ * @returns {(Patch|null)[]}
  */
 export function resolvePatches(song, ...banks) {
   return song.patchNames.map((name) => {
@@ -145,7 +276,11 @@ export function resolvePatches(song, ...banks) {
   });
 }
 
-/** Delta-time GCD, which recovers the composer's row grid.  §1.8. */
+/**
+ * Delta-time GCD, which recovers the composer's row grid.  §1.8.
+ * @param {ImsSong} song
+ * @returns {number}
+ */
 export function deltaGcd(song) {
   let g = 0;
   for (const ev of imsEvents(song)) {
@@ -160,6 +295,8 @@ const gcd = (a, b) => (b ? gcd(b, a % b) : a);
  * Walk an IMS event stream.  Yields {tick, delay, status, a, b} per event;
  * `status` is the full status byte, `a`/`b` the data bytes it actually uses.
  * Tempo events yield {status: 0xF0, a: integer, b: fraction}.
+ * @param {ImsSong} song
+ * @returns {Generator<ImsEvent, void, undefined>}
  */
 export function* imsEvents(song) {
   const d = song.events;
@@ -210,7 +347,12 @@ export function* imsEvents(song) {
 
 /* ------------------------------------------------------------------ ROL */
 
-/** Parse an AdLib Visual Composer song.  §3. */
+/**
+ * Parse an AdLib Visual Composer song.  §3.
+ * @param {Bytes} data
+ * @param {DecodeOptions} [options]
+ * @returns {RolSong}
+ */
 export function parseRol(data, options) {
   const b = asBytes(data);
   if (b.length < 182) throw new FormatError("ROL too short");
@@ -274,7 +416,12 @@ export function parseRol(data, options) {
 
 /* ------------------------------------------------------------------ ISS */
 
-/** Parse timed lyrics.  §4.  Returns null for anything that is not an ISS. */
+/**
+ * Parse timed lyrics.  §4.  Returns null for anything that is not an ISS.
+ * @param {Bytes} data
+ * @param {DecodeOptions} [options]
+ * @returns {Iss|null}
+ */
 export function parseIss(data, options) {
   const b = asBytes(data);
   if (b.length < ISS_HEADER_SIZE) return null;
@@ -328,6 +475,9 @@ export function parseIss(data, options) {
  * animation: a banner line whose right edge runs out and back reads as a
  * volume meter, and 168 corpus lines carry more than sixty cues doing exactly
  * that.
+ *
+ * @param {Iss} iss
+ * @returns {IssSpan[]}
  */
 export function resolveIssSpans(iss) {
   const out = [];
@@ -341,7 +491,11 @@ export function resolveIssSpans(iss) {
   return out;
 }
 
-/** Sniff a dropped file by content, since extensions are not always right. */
+/**
+ * Sniff a dropped file by content, since extensions are not always right.
+ * @param {Bytes} data
+ * @returns {"ims"|"rol"|"bnk"|"iss"|null}
+ */
 export function identify(data) {
   const b = asBytes(data);
   if (b.length >= 8 && String.fromCharCode(...b.subarray(2, 8)) === "ADLIB-") return "bnk";

@@ -43,6 +43,7 @@ export const EXP = (() => {
  * 4π — two whole cycles of a 1024-step phase — which only works out if full
  * scale is 4096.
  */
+/** @param {number} att @returns {number} */
 export function expand(att) {
   if (att >= 0x1800) return 0;                 // past −96 dB, the chip gives up
   const frac = att & 0xff;
@@ -74,6 +75,7 @@ export const KSL_ROM = Object.freeze([
 export const KSL_SHIFT = Object.freeze([null, 1, 2, 0]);
 
 /** KSL attenuation in 0.75 dB units for a block/F-number, before the setting. */
+/** @param {number} block @param {number} fnum @returns {number} */
 export function kslAttenuation(block, fnum) {
   const v = KSL_ROM[(fnum >> 6) & 15] - 8 * (7 - block);
   return v > 0 ? v : 0;
@@ -120,6 +122,7 @@ export const EG_DUTY = Object.freeze([
  */
 export const SILENCE = 0x1000;
 
+/** @param {number} shape @param {number} phase @param {number} outSign @returns {number} */
 export function waveform(shape, phase, outSign) {
   const quarter = phase & 0xff;
   const mirrored = (phase & 0x100) !== 0 ? 255 - quarter : quarter;
@@ -161,10 +164,12 @@ export const TREMOLO_STEPS = Object.freeze(
 );
 
 /** Unit triangle, 0…1…0, for position p in [0, period). */
+/** @param {number} p @param {number} period @returns {number} */
 export function triangle(p, period) {
   const half = period >> 1;
   return p < half ? p / half : 2 - p / half;
 }
 
 /** Clamp an envelope value into the 9-bit attenuation range. */
+/** @type {(v: number) => number} */
 export const clampEnv = (v) => (v < 0 ? 0 : v > ENV_MAX ? ENV_MAX : v);

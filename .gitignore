@@ -1,3 +1,9 @@
 __pycache__/
 *.pyc
 node_modules/
+
+# Generated. `npm run build` makes dist/, `npm run build:types` makes types/;
+# `prepack` makes both, so the tarball has them and the checkout does not.
+dist/
+types/
+*.tgz

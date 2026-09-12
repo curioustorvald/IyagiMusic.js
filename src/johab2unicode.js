@@ -84,15 +84,21 @@ export function johabCharFromCode(code) {
 }
 
 /**
+ * How to read bytes that are not plain Johab.
+ *
+ * @typedef {object} DecodeOptions
+ * @property {string} [replacement] stand-in for undecodable codes; default "�"
+ * @property {(code:number)=>(string|null)} [userGlyph] called for codes in
+ *   the user-defined area (0xD400-0xD8FF) ahead of the built-in mapping, for
+ *   callers that would rather keep those codes distinguishable than read them
+ * @property {boolean} [stopAtNul] stop at the first 0x00; default true
+ */
+
+/**
  * Decode a Johab byte string.
  *
  * @param {Uint8Array|number[]} bytes
- * @param {object} [options]
- * @param {string} [options.replacement="�"] stand-in for undecodable codes
- * @param {(code:number)=>(string|null)} [options.userGlyph] called for codes in
- *   the user-defined area (0xD400-0xD8FF) ahead of the built-in mapping, for
- *   callers that would rather keep those codes distinguishable than read them
- * @param {boolean} [options.stopAtNul=true] stop at the first 0x00
+ * @param {DecodeOptions} [options]
  * @returns {string}
  */
 export function decodeJohab(bytes, options = {}) {
@@ -117,7 +123,12 @@ export function decodeJohab(bytes, options = {}) {
   return out.join("");
 }
 
-/** Trim the trailing NULs and spaces of a fixed-width text field, then decode. */
+/**
+ * Trim the trailing NULs and spaces of a fixed-width text field, then decode.
+ * @param {Uint8Array} bytes
+ * @param {DecodeOptions} [options]
+ * @returns {string}
+ */
 export function decodeJohabField(bytes, options) {
   let end = bytes.length;
   while (end > 0 && (bytes[end - 1] === 0x00 || bytes[end - 1] === 0x20)) end--;

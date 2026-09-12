@@ -22,6 +22,17 @@ export {
 export { resolveIssSpans } from "./formats.js";
 export { decodeJohab, decodeJohabField } from "./johab2unicode.js";
 
+/** @typedef {import("./formats.js").Patch} Patch */
+
+/**
+ * The lyric text that should be lit at a given tick, and how much of it.
+ * `from` and `to` are character cells into `text`, not string indices.
+ * @typedef {object} LyricSpan
+ * @property {number} line index into the ISS's lines
+ * @property {string} text the whole line
+ * @property {number} from @property {number} to
+ */
+
 /**
  * A loaded song, ready to render.
  *
@@ -37,6 +48,7 @@ export class IyagiMusic {
    * @param {Uint8Array} [opts.fallbackBank] .bnk bytes, the general bank
    * @param {Uint8Array} [opts.lyrics]       .iss bytes
    * @param {number} [opts.sampleRate]       output rate; default 48000
+   * @param {number} [opts.gain]             output scale; default 0.7, see below
    * @param {(code:number)=>string|null} [opts.userGlyph]
    *   overrides the built-in mapping for Iyagi's own font glyphs
    *   (JOHAB_ENCODING §5). They decode to their Unicode equivalents now, so
@@ -93,6 +105,7 @@ export class IyagiMusic {
     // Nine channels summing into one mono bus can reach about 1.4 when a song
     // uses every voice at full level, and the chip's own DAC would clip there
     // too. Back off instead, and clamp what still overshoots.
+    /** @type {number} */
     this.gain = opts.gain ?? 0.7;
     this.ratio = NATIVE_RATE / this.sampleRate;
     this.nativeBuf = new Float32Array(2048);
@@ -137,6 +150,9 @@ export class IyagiMusic {
   /**
    * Per-voice meter rows for a display; see `OPL2.readMeters`, which does most
    * of it. Reading clears the peak accumulators, so call it once per frame.
+   *
+   * @param {Float32Array} out from `IyagiMusic.meterBuffer()`
+   * @returns {Float32Array} the same buffer
    */
   readMeters(out) {
     this.chip.readMeters(out);
@@ -166,6 +182,11 @@ export class IyagiMusic {
   /**
    * Fill `out` with mono samples at the requested rate. Returns false once the
    * song has finished and the buffer has been zero-filled.
+   *
+   * @param {Float32Array} out
+   * @param {number} [offset]
+   * @param {number} [count]
+   * @returns {boolean} false once the song has finished
    */
   render(out, offset = 0, count = out.length - offset) {
     if (this.ended) { out.fill(0, offset, offset + count); return false; }
@@ -183,14 +204,25 @@ export class IyagiMusic {
     return true;
   }
 
-  /** Fill interleaved stereo by duplicating the mono chip output. */
+  /**
+   * Fill both channels by duplicating the mono chip output.
+   * @param {Float32Array} left
+   * @param {Float32Array} right
+   * @param {number} [offset]
+   * @param {number} [count]
+   * @returns {boolean}
+   */
   renderStereo(left, right, offset = 0, count = left.length - offset) {
     const ok = this.render(left, offset, count);
     right.set(left.subarray(offset, offset + count), offset);
     return ok;
   }
 
-  /** Render the whole song to one array, capped at `maxSeconds`. */
+  /**
+   * Render the whole song to one array, capped at `maxSeconds`.
+   * @param {number} [maxSeconds]
+   * @returns {Float32Array}
+   */
   renderAll(maxSeconds = 600) {
     const cap = Math.ceil(maxSeconds * this.sampleRate);
     const chunks = [];
@@ -217,6 +249,9 @@ export class IyagiMusic {
    * `{line, text, from, to}` with `from`/`to` in character cells. See
    * `resolveIssSpans` -- a cue marks the right edge of the highlight, not an
    * isolated run.
+   *
+   * @param {number} [tick]
+   * @returns {LyricSpan|null}
    */
   lyricAt(tick = this.tick) {
     if (!this.lyrics) return null;

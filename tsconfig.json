@@ -1,0 +1,25 @@
+{
+  // Declarations only. The library is written as JavaScript with JSDoc and
+  // stays that way -- tsc is here to read those comments and emit types/**,
+  // so the declarations cannot drift from the code they describe. Nothing
+  // here is compiled, and nothing a consumer installs depends on it.
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "rootDir": "src",
+    "outDir": "types",
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom"],
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  // processor.js lives inside an AudioWorkletGlobalScope, whose globals are in
+  // no standard lib, and it exports nothing -- it calls registerProcessor and
+  // ends. There are no declarations to emit for it.
+  "include": ["src/**/*.js"],
+  "exclude": ["src/worklet/processor.js"]
+}

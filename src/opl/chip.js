@@ -54,6 +54,7 @@ const sign = [0];
 const MIX_SCALE = 16384;
 
 class Operator {
+  /** @param {number} index */
   constructor(index) {
     this.index = index;
     this.channel = OP_CHANNEL[index];
@@ -74,11 +75,15 @@ class Operator {
 }
 
 class Channel {
+  /** @param {number} index */
   constructor(index) {
     this.index = index;
     this.fnum = 0; this.block = 0; this.keyOn = false;
     this.feedback = 0; this.additive = false;
-    this.mod = null; this.car = null;
+    // Wired up by OPL2's constructor: a channel's two operators are not
+    // adjacent, and the map lives there.
+    /** @type {Operator|null} */ this.mod = null;
+    /** @type {Operator|null} */ this.car = null;
   }
 }
 
@@ -104,6 +109,7 @@ export class OPL2 {
     this.waveSelectEnabled = false;
     this.noteSelect = false;
     this.rhythmMode = false;
+    /** @type {number} */
     this.rhythmBits = 0;
     this.amDepth = 0;
     this.vibDepth = 0;
@@ -115,7 +121,10 @@ export class OPL2 {
     this.peaks = new Float32Array(METER_VOICES);
   }
 
-  /** Write one chip register. Unknown addresses are stored and ignored. */
+  /**
+   * Write one chip register. Unknown addresses are stored and ignored.
+   * @param {number} reg @param {number} value
+   */
   write(reg, value) {
     reg &= 0xff; value &= 0xff;
     this.registers[reg] = value;
@@ -360,6 +369,8 @@ export class OPL2 {
   /**
    * Render `count` samples into `out` starting at `offset`, at the chip's
    * native rate. Output is roughly ±1 after the /4096 scaling below.
+   *
+   * @param {Float32Array} out @param {number} offset @param {number} count
    */
   generate(out, offset, count) {
     const chans = this.channels;

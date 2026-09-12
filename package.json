@@ -1,10 +1,102 @@
 {
-  "name": "iyagimusic-js",
-  "version": "0.0.1",
-  "description": "Iyagi Music Sound (.ims / .rol) player and format documentation",
-  "type": "module",
+  "name": "iyagimusic",
+  "version": "1.0.0",
+  "description": "Player and format specification for Iyagi Music Sound (.ims) and AdLib ROL (.rol) -- early-1990s Korean BBS music for the AdLib card (YM3812/OPL2), with a clean-room OPL2 emulator and a 2-byte Johab decoder.",
+  "keywords": [
+    "adlib", "opl2", "opl", "ym3812", "fm-synthesis", "chiptune",
+    "ims", "rol", "bnk", "iss", "iyagi", "이야기",
+    "johab", "조합형", "hangul", "korean", "pc통신",
+    "audioworklet", "emulator", "retrocomputing"
+  ],
+  "homepage": "https://github.com/curioustorvald/IyagiMusic.js#readme",
+  "bugs": "https://github.com/curioustorvald/IyagiMusic.js/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/curioustorvald/IyagiMusic.js.git"
+  },
+  "author": "CuriousTorvald (https://github.com/curioustorvald)",
   "license": "MIT",
+  "type": "module",
+  "main": "./src/player.js",
+  "types": "./types/player.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/player.d.ts",
+      "default": "./src/player.js"
+    },
+    "./formats": {
+      "types": "./types/formats.d.ts",
+      "default": "./src/formats.js"
+    },
+    "./johab": {
+      "types": "./types/johab2unicode.d.ts",
+      "default": "./src/johab2unicode.js"
+    },
+    "./driver": {
+      "types": "./types/driver.d.ts",
+      "default": "./src/driver.js"
+    },
+    "./sequencer": {
+      "types": "./types/sequencer.d.ts",
+      "default": "./src/sequencer.js"
+    },
+    "./fnum-table": {
+      "types": "./types/fnum-table.d.ts",
+      "default": "./src/fnum-table.js"
+    },
+    "./opl": {
+      "types": "./types/opl/chip.d.ts",
+      "default": "./src/opl/chip.js"
+    },
+    "./opl/constants": {
+      "types": "./types/opl/constants.d.ts",
+      "default": "./src/opl/constants.js"
+    },
+    "./opl/tables": {
+      "types": "./types/opl/tables.d.ts",
+      "default": "./src/opl/tables.js"
+    },
+    "./worklet": "./dist/iyagi-processor.bundle.js",
+    "./worklet/url": {
+      "types": "./types/worklet/url.d.ts",
+      "default": "./src/worklet/url.js"
+    },
+    "./worklet/processor": "./src/worklet/processor.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "iyagi-render": "./bin/iyagi-render.mjs"
+  },
+  "sideEffects": [
+    "./src/worklet/processor.js",
+    "./dist/iyagi-processor.bundle.js"
+  ],
+  "files": [
+    "src",
+    "dist",
+    "types",
+    "bin",
+    "docs",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "test": "node --test test/*.test.js"
+    "build": "node tools/build-worklet.mjs",
+    "build:types": "tsc -p tsconfig.json",
+    "build:pages": "node tools/build-pages.mjs",
+    "pretest": "npm run build",
+    "test": "node --test test/*.test.js",
+    "test:johab": "python3 test/test_johab.py",
+    "prepack": "npm run build && npm run build:types",
+    "prepublishOnly": "npm test"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
