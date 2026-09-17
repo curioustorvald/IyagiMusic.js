@@ -1,12 +1,21 @@
-// The AdLib low-level driver: patches, volumes, notes and bends in, OPL2
+// The AdLib low-level driver: patches, volumes, notes and bends in, OPL
 // register writes out. This is a straight realisation of
 // docs/ENGINE_SPEC.en.md; section numbers below refer to it.
 //
 // The driver holds no chip of its own -- it writes into any object with a
 // `write(reg, value)` method -- so the same code drives the emulator, a test
 // double that logs writes, or real hardware over a serial bridge.
+//
+// It drives a YM3812 or a YMF262, and the difference is smaller than it looks:
+// an OPL3 is the same nine channels twice, at `reg | 0x100`, so every table
+// below is the OPL2's table with a second copy appended. What is genuinely new
+// is in §10 and §11 -- four-operator voices and the stereo switches.
 
 import { FNUM_TABLE, SEMITONES, SUBSTEPS } from "./fnum-table.js";
+import {
+  CHANNEL_COUNT, OPL3_CHANNEL_COUNT, BANK_STRIDE, REG_FOUROP, REG_OPL3_ENABLE,
+  OPL3_NEW, FOUROP_PAIRS, PAN_CENTRE, PAN_SHIFT, RHYTHM_VOICES,
+} from "./opl/constants.js";
 
 /** §5.2: MIDI note 60 is chip note 48. */
 export const MIDI_TO_CHIP = 12;
@@ -14,7 +23,14 @@ export const CHIP_NOTES = 96;
 export const MID_PITCH = 0x2000;
 export const MAX_VOLUME = 127;
 
-/** §1: logical voice numbers of the five rhythm instruments. */
+/**
+ * §1: logical voice numbers of the five rhythm instruments **on an OPL2**.
+ *
+ * The rhythm voices always come last, so on an OPL3 they are 15…19 instead.
+ * `driver.rhythmBase` is where they start and `driver.bd`…`driver.hh` name
+ * them on whichever chip the driver is actually driving; these constants stay
+ * because nine-voice callers are the common case and 6…10 is what they mean.
+ */
 export const BD = 6, SD = 7, TOM = 8, TC = 9, HH = 10;
 const RHYTHM_MASK = [0x10, 0x08, 0x04, 0x02, 0x01];   // BD, SD, TOM, TC, HH
 
@@ -22,28 +38,30 @@ const RHYTHM_MASK = [0x10, 0x08, 0x04, 0x02, 0x01];   // BD, SD, TOM, TC, HH
 const TOM_PITCH = 24;
 const TOM_TO_SD = 7;
 
-/** §1: register offset of each operator, by slot number. */
+/** §1: register offset of each operator, by slot number, within one bank. */
 const SLOT_OFFSET = [
   0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21,
 ];
-/** §1: the two slots of each melodic voice. */
+/** §1: the two slots of each melodic channel. */
 const MELODIC_SLOTS = [
   [0, 3], [1, 4], [2, 5], [6, 9], [7, 10], [8, 11], [12, 15], [13, 16], [14, 17],
 ];
-/** §1: percussive mode -- 255 means the voice uses one operator only. */
-const PERCUSSIVE_SLOTS = [
-  [0, 3], [1, 4], [2, 5], [6, 9], [7, 10], [8, 11],
-  [12, 15], [16, 255], [14, 255], [17, 255], [13, 255],
+/** §6: the rhythm voices' slots -- 255 means the voice uses one operator only. */
+const RHYTHM_SLOTS = [
+  [12, 15],      // bass drum, channel 6, two operators like any melodic voice
+  [16, 255],     // snare     channel 7 carrier
+  [14, 255],     // tom-tom   channel 8 modulator
+  [17, 255],     // cymbal    channel 8 carrier
+  [13, 255],     // hi-hat    channel 7 modulator
 ];
 const SLOT_IS_CARRIER = [
   0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1,
 ];
-const MELODIC_VOICE_OF_SLOT = [
+/** §1: which channel of its bank an operator slot physically belongs to. */
+const SLOT_CHANNEL = [
   0, 1, 2, 0, 1, 2, 3, 4, 5, 3, 4, 5, 6, 7, 8, 6, 7, 8,
 ];
-const PERCUSSIVE_VOICE_OF_SLOT = [
-  0, 1, 2, 0, 1, 2, 3, 4, 5, 3, 4, 5, BD, HH, TOM, BD, SD, TC,
-];
+const SLOTS_PER_BANK = 18;
 
 /** The thirteen per-operator parameters, in bank order. §2.3 of the formats doc. */
 const P_KSL = 0, P_MULTIPLE = 1, P_FEEDBACK = 2, P_ATTACK = 3, P_SUSTAIN = 4,
@@ -62,31 +80,181 @@ function operatorParams(op) {
   return out;
 }
 
+/** Where a slot's four-operator chain puts it: op1, op2, op3 or op4. */
+const OP1 = 0, OP2 = 1, OP3 = 2, OP4 = 3, NOT_FOUR = -1;
+
+/**
+ * §1, §10. The voice layouts of a chip. They depend on nothing but which chip
+ * it is, so they are built once and shared -- `sopSequence` has to know the
+ * shape of a chip's voices before a driver exists to ask.
+ *
+ * Both layouts follow one rule: melodic voices in channel order, then -- in
+ * percussive mode -- the five rhythm instruments on the end, which take over
+ * channels 6, 7 and 8 of the first bank. Nine channels give 9 voices or 6 + 5;
+ * eighteen give 18 or 15 + 5. The rhythm voices are the last five either way,
+ * which is what lets a display index a meter row with a voice number without
+ * knowing which chip it is looking at.
+ *
+ * @param {boolean} opl3
+ */
+function makeLayout(opl3) {
+  const banks = opl3 ? 2 : 1;
+  const channelCount = opl3 ? OPL3_CHANNEL_COUNT : CHANNEL_COUNT;
+  const slotCount = banks * SLOTS_PER_BANK;
+
+  const melodicSlots = [], melodicChannel = [];
+  for (let b = 0; b < banks; b++) {
+    for (let c = 0; c < CHANNEL_COUNT; c++) {
+      melodicSlots.push(MELODIC_SLOTS[c].map((slot) => slot + b * SLOTS_PER_BANK));
+      melodicChannel.push(c + b * CHANNEL_COUNT);
+    }
+  }
+  const melodicMap = { slots: melodicSlots, channel: melodicChannel };
+
+  // Percussive mode: the first bank loses channels 6, 7 and 8 to the drums,
+  // the second bank keeps all nine, and the drums go on the end.
+  const percSlots = [], percChannel = [];
+  for (let c = 0; c < 6; c++) { percSlots.push(melodicSlots[c]); percChannel.push(c); }
+  for (let c = CHANNEL_COUNT; c < channelCount; c++) {
+    percSlots.push(melodicSlots[c]); percChannel.push(melodicChannel[c]);
+  }
+  const rhythmBase = percSlots.length;
+  for (const slots of RHYTHM_SLOTS) percSlots.push(slots);
+  percChannel.push(6, 7, 8, 8, 7);
+  const percussiveMap = { slots: percSlots, channel: percChannel };
+
+  // A slot's channel never moves; only which voice is using it does.
+  const slotChannel = new Int32Array(slotCount);
+  const slotCarrier = new Int32Array(slotCount);
+  const slotRegister = new Int32Array(slotCount);
+  for (let s = 0; s < slotCount; s++) {
+    const local = s % SLOTS_PER_BANK, bank = (s / SLOTS_PER_BANK) | 0;
+    slotChannel[s] = SLOT_CHANNEL[local] + bank * CHANNEL_COUNT;
+    slotCarrier[s] = SLOT_IS_CARRIER[local];
+    slotRegister[s] = SLOT_OFFSET[local] + bank * BANK_STRIDE;
+  }
+
+  // §10: only six channel pairs can be joined, and only ever a channel with
+  // the one three above it in the same bank. Translating those channel pairs
+  // into voice numbers is all this does; in melodic mode voice and channel are
+  // the same number, and in percussive mode the second bank has been shifted
+  // down by the three channels the drums took.
+  for (const map of [melodicMap, percussiveMap]) {
+    const index = new Int32Array(map.slots.length).fill(-1);
+    const partner = new Int32Array(map.slots.length).fill(-1);
+    const pairs = [];
+    if (opl3) {
+      FOUROP_PAIRS.forEach(([headCh, slaveCh], i) => {
+        const head = map.channel.indexOf(headCh), slave = map.channel.indexOf(slaveCh);
+        if (head < 0 || slave < 0) return;
+        index[head] = i;
+        partner[head] = slave;
+        partner[slave] = head;
+        pairs.push([head, slave]);
+      });
+    }
+    map.four = { index, partner, pairs };
+    // Slot -> voice, which the layout fixes. Only the four-operator override
+    // on top of it moves, and `#voiceOfSlot` applies that.
+    map.voiceOfSlot = new Int32Array(slotCount).fill(-1);
+    map.slots.forEach((slots, v) => {
+      for (const slot of slots) if (slot !== 255) map.voiceOfSlot[slot] = v;
+    });
+  }
+
+  return {
+    opl3, banks, channelCount, slotCount, rhythmBase,
+    melodicMap, percussiveMap, slotChannel, slotCarrier, slotRegister,
+  };
+}
+
+const LAYOUTS = [makeLayout(false), makeLayout(true)];
+
+/** The shared layout of a YM3812 or a YMF262. @param {boolean} opl3 */
+export function chipLayout(opl3) { return LAYOUTS[opl3 ? 1 : 0]; }
+
+/**
+ * What a sequencer needs to know about a chip's voices before it can lay a
+ * song over them: how many melodic ones there are, where the drums start, and
+ * which voices can be joined into four-operator ones.
+ *
+ * @param {boolean} opl3 @param {boolean} percussive
+ * @returns {{melodicVoices:number, rhythmBase:number, fourOpPairs:number[][], voiceCount:number}}
+ */
+export function voiceLayout(opl3, percussive) {
+  const layout = chipLayout(opl3);
+  const map = percussive ? layout.percussiveMap : layout.melodicMap;
+  return {
+    melodicVoices: percussive ? layout.rhythmBase : map.slots.length,
+    rhythmBase: layout.rhythmBase,
+    fourOpPairs: map.four.pairs,
+    voiceCount: map.slots.length,
+  };
+}
+
 export class AdlibDriver {
-  /** @param {{write(reg:number, value:number):void}} chip */
-  constructor(chip) {
+  /**
+   * @param {{write(reg:number, value:number):void}} chip
+   * @param {object} [options]
+   * @param {boolean} [options.opl3] drive a YMF262: two banks, eighteen
+   *   channels, four-operator voices and stereo. Default false, which is a
+   *   YM3812 and is what `.ims` and `.rol` want.
+   */
+  constructor(chip, options = {}) {
     this.chip = chip;
-    this.slotParams = Array.from({ length: 18 }, () => new Int32Array(14));
+    /** @type {boolean} */
+    this.opl3 = !!options.opl3;
+    const layout = chipLayout(this.opl3);
+    this.banks = layout.banks;
+    this.channelCount = layout.channelCount;
+    this.slotCount = layout.slotCount;
+    /** @type {number} the voice number of the bass drum: 6 here, 15 on an OPL3 */
+    this.rhythmBase = layout.rhythmBase;
+    this.melodicMap = layout.melodicMap;
+    this.percussiveMap = layout.percussiveMap;
+    this.slotChannel = layout.slotChannel;
+    this.slotCarrier = layout.slotCarrier;
+    this.slotRegister = layout.slotRegister;
+    /** §1: the five rhythm voices, on whichever chip this is. */
+    this.bd = this.rhythmBase;
+    this.sd = this.rhythmBase + 1;
+    this.tom = this.rhythmBase + 2;
+    this.tc = this.rhythmBase + 3;
+    this.hh = this.rhythmBase + 4;
+    this.slotParams = Array.from({ length: this.slotCount }, () => new Int32Array(14));
     this.reset();
   }
 
   /** §2. Leaves the chip in melodic mode with every voice at full volume. */
   reset() {
-    for (let r = 1; r <= 0xf5; r++) this.chip.write(r, 0);
+    // NEW first: until it is set, a YMF262 ignores its second bank, so zeroing
+    // the bank before setting it would zero nothing.
+    if (this.opl3) this.chip.write(REG_OPL3_ENABLE, OPL3_NEW);
+    for (let b = 0; b < this.banks; b++) {
+      const base = b * BANK_STRIDE;
+      for (let r = 1; r <= 0xf5; r++) {
+        const reg = base + r;
+        if (reg === REG_FOUROP || reg === REG_OPL3_ENABLE) continue;
+        this.chip.write(reg, 0);
+      }
+    }
     this.chip.write(0x04, 0x06);
+    if (this.opl3) this.chip.write(REG_FOUROP, 0);
 
-    this.voiceNote = new Int32Array(9);
-    this.voiceKeyOn = new Int32Array(9);
-    this.voiceBend = new Int32Array(9).fill(MID_PITCH);
-    this.bxCache = new Int32Array(9);
-    /** @type {Int32Array} per-voice volume 0..127, eleven wide for rhythm mode */
-    this.voiceVolume = new Int32Array(11).fill(MAX_VOLUME);
+    this.voiceNote = new Int32Array(this.channelCount + RHYTHM_VOICES);
+    this.voiceKeyOn = new Int32Array(this.channelCount + RHYTHM_VOICES);
+    this.voiceBend = new Int32Array(this.channelCount + RHYTHM_VOICES).fill(MID_PITCH);
+    this.bxCache = new Int32Array(this.channelCount + RHYTHM_VOICES);
+    /** @type {Int32Array} per-voice volume 0..127, wide enough for rhythm mode */
+    this.voiceVolume = new Int32Array(this.channelCount + RHYTHM_VOICES).fill(MAX_VOLUME);
+    /** @type {Int32Array} 1 where a voice is currently four operators wide */
+    this.voiceFourOp = new Int32Array(this.channelCount + RHYTHM_VOICES);
     /** @type {number} */
     this.percBits = 0;
     /** @type {boolean} */
     this.percussion = false;
-    /** @type {number} 9 melodic, or 11 in rhythm mode */
-    this.voiceCount = 9;
+    /** @type {number} 9 or 11 on an OPL2; 18 or 20 on an OPL3 */
+    this.voiceCount = this.melodicMap.slots.length;
     /** @type {number} */
     this.amDepth = 0;
     /** @type {number} */
@@ -97,7 +265,16 @@ export class AdlibDriver {
     this.pitchRange = 1;
     /** @type {boolean} */
     this.waveSelect = true;
+    /** @type {number} register 0x104, one bit per pair of FOUROP_PAIRS */
+    this.fourOpBits = 0;
     for (const p of this.slotParams) p.fill(0);
+
+    // §11: a YMF262 comes up with both stereo switches clear, which is silence
+    // rather than mono. Writing centre to every channel is what makes a driver
+    // that never thinks about panning sound the same on both chips.
+    this.channelPan = new Int32Array(this.channelCount).fill(PAN_CENTRE);
+    this.channelC0 = new Int32Array(this.channelCount);
+    if (this.opl3) for (let c = 0; c < this.channelCount; c++) this.#writeC0(c);
 
     this.setMode(false);
     this.setGlobalParams(0, 0, 0);
@@ -108,24 +285,34 @@ export class AdlibDriver {
   /** §6. `percussive` true puts the chip in rhythm mode. @param {boolean} percussive */
   setMode(percussive) {
     if (percussive) {
-      this.voiceNote[TOM] = TOM_PITCH;
-      this.voiceBend[TOM] = MID_PITCH;
       this.percussion = true;              // slot maps must already be percussive
-      this.#updateFNums(TOM);
-      this.voiceNote[SD] = TOM_PITCH + TOM_TO_SD;
-      this.voiceBend[SD] = MID_PITCH;
-      this.#updateFNums(SD);
+      this.voiceCount = this.percussiveMap.slots.length;
+      this.voiceNote[this.tom] = TOM_PITCH;
+      this.voiceBend[this.tom] = MID_PITCH;
+      this.#updateFNums(this.tom);
+      this.voiceNote[this.sd] = TOM_PITCH + TOM_TO_SD;
+      this.voiceBend[this.sd] = MID_PITCH;
+      this.#updateFNums(this.sd);
     }
     this.percussion = percussive;
-    this.voiceCount = percussive ? 11 : 9;
+    this.voiceCount = percussive
+      ? this.percussiveMap.slots.length : this.melodicMap.slots.length;
     this.percBits = 0;
+    // §10: the two modes number their voices differently, so a four-operator
+    // flag set under one of them means something else under the other. Split
+    // every pair rather than carry the flags across.
+    if (this.opl3 && this.fourOpBits) {
+      this.fourOpBits = 0;
+      this.voiceFourOp.fill(0);
+      this.chip.write(REG_FOUROP, 0);
+    }
     this.#sendAmVibRhythm();
   }
 
   /** @param {boolean} on */
   setWaveSelect(on) {
     this.waveSelect = !!on;
-    for (let s = 0; s < 18; s++) this.chip.write(0xe0 + SLOT_OFFSET[s], 0);
+    for (let s = 0; s < this.slotCount; s++) this.chip.write(0xe0 + this.slotRegister[s], 0);
     this.chip.write(0x01, on ? 0x20 : 0);
   }
 
@@ -143,15 +330,55 @@ export class AdlibDriver {
     this.chip.write(0x08, noteSelect ? 0x40 : 0);
   }
 
+  /** The voice numbers a song may use as ordinary melodic voices. §1. */
+  get melodicVoices() {
+    return this.percussion ? this.rhythmBase : this.voiceCount;
+  }
+
+  /**
+   * §10. Voice-number pairs that can be joined into one four-operator voice,
+   * in the current mode. Empty on an OPL2.
+   * @returns {number[][]}
+   */
+  get fourOpPairs() {
+    return this.#map().four.pairs;
+  }
+
   /** §3. Load a parsed bank patch into a voice.
+   *
+   * A patch carrying a second operator pair (SOP §3.3) is loaded as a
+   * four-operator voice where the voice can be one, and as its first pair
+   * alone where it cannot -- which is the whole of the OPL2 degradation, in
+   * one branch.
+   *
    * @param {number} voice @param {import("./formats.js").Patch} patch
    */
   setVoiceTimbre(voice, patch) {
     if (voice >= this.voiceCount) return;
+    const map = this.#map();
+    const pairIndex = map.four.index[voice];
+    const four = pairIndex >= 0 && !!patch.pair;
+    // Joining or splitting the pair before loading it: the chip reads four
+    // operators as one voice only while 0x104 says so.
+    if (pairIndex >= 0) this.#setFourOp(pairIndex, voice, four);
+
     const slots = this.#slotsOf(voice);
     this.#setSlot(slots[0], operatorParams(patch.modulator), patch.modWave);
     if (slots[1] !== 255) {
       this.#setSlot(slots[1], operatorParams(patch.carrier), patch.carWave);
+    }
+    if (four) {
+      const partner = this.#slotsOf(map.four.partner[voice]);
+      this.#setSlot(partner[0], operatorParams(patch.pair.modulator), patch.pair.modWave);
+      this.#setSlot(partner[1], operatorParams(patch.pair.carrier), patch.pair.carWave);
+      // §10: all four operators are one voice at one pitch, and the chip reads
+      // the head's F-number. Writing it to both halves keeps the two readings
+      // of that from being distinguishable.
+      this.#updateFNums(voice);
+      // Which operators channel volume applies to depends on *both* halves'
+      // connection bits, so the first pair's levels were computed against the
+      // second pair's previous patch. Send all four again now they agree.
+      for (const slot of this.#allSlotsOf(voice)) this.#sendKslLevel(slot);
     }
   }
 
@@ -161,16 +388,36 @@ export class AdlibDriver {
   setVoiceVolume(voice, volume) {
     if (voice >= this.voiceCount) return;
     this.voiceVolume[voice] = Math.min(MAX_VOLUME, volume | 0);
-    const slots = this.#slotsOf(voice);
-    this.#sendKslLevel(slots[0]);
-    if (slots[1] !== 255) this.#sendKslLevel(slots[1]);
+    for (const slot of this.#allSlotsOf(voice)) this.#sendKslLevel(slot);
+  }
+
+  /**
+   * §11. Route a voice to the left output, the right, both or neither, as the
+   * PAN_* values. An OPL2 has one output and ignores this.
+   *
+   * @param {number} voice @param {number} pan PAN_NONE…PAN_CENTRE
+   */
+  setVoicePan(voice, pan) {
+    if (!this.opl3 || voice >= this.voiceCount) return;
+    const map = this.#map();
+    const value = pan & 3;
+    // A four-operator voice is two channels, and which of the two carries the
+    // output is not worth depending on: both get the same switches.
+    const voices = map.four.index[voice] >= 0 && this.voiceFourOp[voice]
+      ? [voice, map.four.partner[voice]] : [voice];
+    for (const v of voices) {
+      const channel = map.channel[v];
+      if (this.channelPan[channel] === value) continue;
+      this.channelPan[channel] = value;
+      this.#writeC0(channel);
+    }
   }
 
   /** §5. 14-bit bend, 0x2000 is centre. Melodic voices and the bass drum.
    * @param {number} voice @param {number} bend 14-bit, 0x2000 centred
    */
   setVoicePitch(voice, bend) {
-    if ((!this.percussion && voice < 9) || voice <= BD) {
+    if (this.#isMelodic(voice) || voice === this.bd) {
       this.voiceBend[voice] = Math.min(0x3fff, Math.max(0, bend | 0));
       this.#updateFNums(voice);
     }
@@ -182,22 +429,22 @@ export class AdlibDriver {
   noteOn(voice, note) {
     let pitch = note - MIDI_TO_CHIP;
     if (pitch < 0) pitch = 0;
-    if ((!this.percussion && voice < 9) || voice < BD) {
+    if (this.#isMelodic(voice)) {
       this.voiceNote[voice] = pitch;
       this.voiceKeyOn[voice] = 0x20;
       this.#updateFNums(voice);
-    } else if (this.percussion && voice <= HH) {
-      if (voice === BD) {
-        this.voiceNote[BD] = pitch;
-        this.#updateFNums(BD);
-      } else if (voice === TOM && this.voiceNote[TOM] !== pitch) {
+    } else if (this.#isRhythm(voice)) {
+      if (voice === this.bd) {
+        this.voiceNote[this.bd] = pitch;
+        this.#updateFNums(this.bd);
+      } else if (voice === this.tom && this.voiceNote[this.tom] !== pitch) {
         // §6: only the tom carries a pitch, and it drags the snare with it.
-        this.voiceNote[TOM] = pitch;
-        this.voiceNote[SD] = pitch + TOM_TO_SD;
-        this.#updateFNums(TOM);
-        this.#updateFNums(SD);
+        this.voiceNote[this.tom] = pitch;
+        this.voiceNote[this.sd] = pitch + TOM_TO_SD;
+        this.#updateFNums(this.tom);
+        this.#updateFNums(this.sd);
       }
-      this.percBits |= RHYTHM_MASK[voice - BD];
+      this.percBits |= RHYTHM_MASK[voice - this.rhythmBase];
       this.#sendAmVibRhythm();
     }
   }
@@ -206,22 +453,50 @@ export class AdlibDriver {
    * @param {number} voice
    */
   noteOff(voice) {
-    if ((!this.percussion && voice < 9) || voice < BD) {
+    if (this.#isMelodic(voice)) {
       this.voiceKeyOn[voice] = 0;
       this.bxCache[voice] &= ~0x20;
-      this.chip.write(0xb0 + voice, this.bxCache[voice]);
-    } else if (this.percussion && voice <= HH) {
-      this.percBits &= ~RHYTHM_MASK[voice - BD];
+      this.#writeChannel(0xb0, this.#map().channel[voice], this.bxCache[voice]);
+      if (this.voiceFourOp[voice]) {
+        this.#writeChannel(0xb0, this.#map().channel[this.#map().four.partner[voice]],
+          this.bxCache[voice]);
+      }
+    } else if (this.#isRhythm(voice)) {
+      this.percBits &= ~RHYTHM_MASK[voice - this.rhythmBase];
       this.#sendAmVibRhythm();
     }
   }
 
-  #slotsOf(voice) {
-    return this.percussion ? PERCUSSIVE_SLOTS[voice] : MELODIC_SLOTS[voice];
+  #map() { return this.percussion ? this.percussiveMap : this.melodicMap; }
+
+  /** A voice that takes a note and a pitch of its own, as opposed to a drum. */
+  #isMelodic(voice) { return voice >= 0 && voice < this.melodicVoices; }
+
+  #isRhythm(voice) {
+    return this.percussion &&
+      voice >= this.rhythmBase && voice < this.rhythmBase + RHYTHM_VOICES;
   }
 
-  #voiceOfSlot(slot) {
-    return this.percussion ? PERCUSSIVE_VOICE_OF_SLOT[slot] : MELODIC_VOICE_OF_SLOT[slot];
+  #slotsOf(voice) { return this.#map().slots[voice]; }
+
+  /** Every operator slot a voice occupies: two, four, or -- a drum -- one. */
+  #allSlotsOf(voice) {
+    const slots = this.#slotsOf(voice).filter((s) => s !== 255);
+    if (!this.voiceFourOp[voice]) return slots;
+    return slots.concat(this.#map().slots[this.#map().four.partner[voice]]);
+  }
+
+  /** §10. Join or split one channel pair, and remember which voices are wide. */
+  #setFourOp(pairIndex, voice, on) {
+    const map = this.#map();
+    const partner = map.four.partner[voice];
+    const bit = 1 << pairIndex;
+    const wanted = on ? (this.fourOpBits | bit) : (this.fourOpBits & ~bit);
+    this.voiceFourOp[voice] = on ? 1 : 0;
+    this.voiceFourOp[partner] = 0;              // the slave is never a voice itself
+    if (wanted === this.fourOpBits) return;
+    this.fourOpBits = wanted;
+    this.chip.write(REG_FOUROP, this.fourOpBits);
   }
 
   #setSlot(slot, params, waveSel) {
@@ -238,35 +513,96 @@ export class AdlibDriver {
     this.#sendWaveSelect(slot);
   }
 
-  /** §4. The three-way condition is the whole point of this routine. */
+  /**
+   * §4. The three-way condition is the whole point of this routine: channel
+   * volume scales the operators that reach the output and leaves the ones that
+   * only modulate alone, because scaling a modulator changes the timbre rather
+   * than the level.
+   *
+   * §10 adds the four-operator reading of "reaches the output", which the two
+   * halves' connection bits choose between; `#chainPosition` works out which
+   * of the four an operator is.
+   */
   #sendKslLevel(slot) {
     const p = this.slotParams[slot];
     const voice = this.#voiceOfSlot(slot);
     let amplitude = 63 - (p[P_LEVEL] & 63);
-    const singleSlot = this.percussion && voice > BD;
-    if (SLOT_IS_CARRIER[slot] || !p[P_CONNECTION] || singleSlot) {
+    if (this.#isOutputSlot(slot, voice)) {
       amplitude = (amplitude * this.voiceVolume[voice] + (MAX_VOLUME + 1) / 2) >> 7;
     }
     const value = (63 - amplitude) | ((p[P_KSL] & 3) << 6);
-    this.chip.write(0x40 + SLOT_OFFSET[slot], value);
+    this.chip.write(0x40 + this.slotRegister[slot], value);
+  }
+
+  /** Whether channel volume applies to this operator. §4, §10. */
+  #isOutputSlot(slot, voice) {
+    const position = this.#chainPosition(slot, voice);
+    if (position === NOT_FOUR) {
+      const singleSlot = this.percussion && voice > this.bd;
+      return !!this.slotCarrier[slot] || !this.slotParams[slot][P_CONNECTION] || singleSlot;
+    }
+    // §10: reading each half's connection bit as "this half's first operator
+    // goes straight to the output" names the outputs of all four connections.
+    const map = this.#map();
+    const head = this.#slotsOf(voice);
+    const slave = this.#slotsOf(map.four.partner[voice]);
+    const cnt1 = !this.slotParams[head[0]][P_CONNECTION];
+    const cnt2 = !this.slotParams[slave[0]][P_CONNECTION];
+    switch (position) {
+      case OP1: return cnt1;
+      case OP2: return false;
+      case OP3: return cnt2;
+      default: return true;                     // OP4 is always an output
+    }
+  }
+
+  /** Where a slot sits in its voice's four-operator chain, if it is in one. */
+  #chainPosition(slot, voice) {
+    if (voice < 0 || !this.voiceFourOp[voice]) return NOT_FOUR;
+    const map = this.#map();
+    const head = this.#slotsOf(voice);
+    const slave = this.#slotsOf(map.four.partner[voice]);
+    if (slot === head[0]) return OP1;
+    if (slot === head[1]) return OP2;
+    if (slot === slave[0]) return OP3;
+    if (slot === slave[1]) return OP4;
+    return NOT_FOUR;
+  }
+
+  /** Which voice is currently using a slot, or -1 while none is. */
+  #voiceOfSlot(slot) {
+    const map = this.#map();
+    const v = map.voiceOfSlot[slot];
+    if (v < 0) return -1;
+    // The slave half of a joined pair belongs to its head's voice: that is
+    // whose volume and whose patch it is carrying.
+    const partner = map.four.partner[v];
+    return partner >= 0 && this.voiceFourOp[partner] ? partner : v;
   }
 
   #sendFeedbackConnection(slot) {
-    if (SLOT_IS_CARRIER[slot]) return;
+    if (this.slotCarrier[slot]) return;
     const p = this.slotParams[slot];
-    const value = ((p[P_FEEDBACK] & 7) << 1) | (p[P_CONNECTION] ? 0 : 1);
-    this.chip.write(0xc0 + MELODIC_VOICE_OF_SLOT[slot], value);
+    const channel = this.slotChannel[slot];
+    this.channelC0[channel] = ((p[P_FEEDBACK] & 7) << 1) | (p[P_CONNECTION] ? 0 : 1);
+    this.#writeC0(channel);
+  }
+
+  /** §11. One channel's 0xC0: feedback and connection, plus the stereo bits. */
+  #writeC0(channel) {
+    const pan = this.opl3 ? (this.channelPan[channel] & 3) << PAN_SHIFT : 0;
+    this.#writeChannel(0xc0, channel, this.channelC0[channel] | pan);
   }
 
   #sendAttackDecay(slot) {
     const p = this.slotParams[slot];
-    this.chip.write(0x60 + SLOT_OFFSET[slot],
+    this.chip.write(0x60 + this.slotRegister[slot],
       ((p[P_ATTACK] & 0x0f) << 4) | (p[P_DECAY] & 0x0f));
   }
 
   #sendSustainRelease(slot) {
     const p = this.slotParams[slot];
-    this.chip.write(0x80 + SLOT_OFFSET[slot],
+    this.chip.write(0x80 + this.slotRegister[slot],
       ((p[P_SUSTAIN] & 0x0f) << 4) | (p[P_RELEASE] & 0x0f));
   }
 
@@ -274,18 +610,31 @@ export class AdlibDriver {
     const p = this.slotParams[slot];
     const value = (p[P_AM] ? 0x80 : 0) | (p[P_VIB] ? 0x40 : 0) |
       (p[P_EG] ? 0x20 : 0) | (p[P_KSR] ? 0x10 : 0) | (p[P_MULTIPLE] & 0x0f);
-    this.chip.write(0x20 + SLOT_OFFSET[slot], value);
+    this.chip.write(0x20 + this.slotRegister[slot], value);
   }
 
+  /**
+   * §3. An OPL3 has eight waveforms and an OPL2 four, so the patch's own
+   * setting is masked by what the chip can reach rather than by what the file
+   * happens to hold. A `.sop` stores OPL3 wave selects (SOP §3.2); on a YM3812
+   * they become whichever of the first four share their low two bits.
+   */
   #sendWaveSelect(slot) {
-    const wave = this.waveSelect ? this.slotParams[slot][13] & 3 : 0;
-    this.chip.write(0xe0 + SLOT_OFFSET[slot], wave);
+    const mask = this.opl3 ? 7 : 3;
+    const wave = this.waveSelect ? this.slotParams[slot][13] & mask : 0;
+    this.chip.write(0xe0 + this.slotRegister[slot], wave);
   }
 
   #sendAmVibRhythm() {
     const value = (this.amDepth ? 0x80 : 0) | (this.vibDepth ? 0x40 : 0) |
       (this.percussion ? 0x20 : 0) | this.percBits;
     this.chip.write(0xbd, value);
+  }
+
+  /** A per-channel register, in whichever bank the channel lives. */
+  #writeChannel(base, channel, value) {
+    const bank = channel >= CHANNEL_COUNT ? BANK_STRIDE : 0;
+    this.chip.write(base + (channel % CHANNEL_COUNT) + bank, value);
   }
 
   /** §5.2. */
@@ -309,9 +658,15 @@ export class AdlibDriver {
     if (block < 0) { block++; entry >>= 1; }
     const fnum = entry & 0x3ff;
 
-    this.chip.write(0xa0 + voice, fnum & 0xff);
+    const map = this.#map();
     const bx = keyOn | ((block & 7) << 2) | ((fnum >> 8) & 3);
-    this.chip.write(0xb0 + voice, bx);
+    const channels = this.voiceFourOp[voice]
+      ? [map.channel[voice], map.channel[map.four.partner[voice]]]
+      : [map.channel[voice]];
+    for (const channel of channels) {
+      this.#writeChannel(0xa0, channel, fnum & 0xff);
+      this.#writeChannel(0xb0, channel, bx);
+    }
     return bx;
   }
 }

@@ -4,13 +4,16 @@
 // tick positions, plus a tempo that events may change. The sequencer owns the
 // clock (docs/ENGINE_SPEC.en.md §9) and the driver owns the chip.
 
-import { AdlibDriver, BD, HH, MID_PITCH } from "./driver.js";
+import { AdlibDriver, BD, MID_PITCH } from "./driver.js";
 import { imsEvents, sopPatch } from "./formats.js";
-import { NATIVE_RATE } from "./opl/constants.js";
+import {
+  NATIVE_RATE, METER_VOICES, RHYTHM_VOICES,
+  PAN_LEFT, PAN_RIGHT, PAN_CENTRE,
+} from "./opl/constants.js";
 
 /** Event kinds a sequencer understands. */
 export const NOTE_ON = 0, NOTE_OFF = 1, VOLUME = 2, PATCH = 3, BEND = 4,
-  TEMPO = 5, END = 6;
+  TEMPO = 5, END = 6, PAN = 7;
 
 /** @typedef {import("./formats.js").Patch} Patch */
 
@@ -27,6 +30,7 @@ export const NOTE_ON = 0, NOTE_OFF = 1, VOLUME = 2, PATCH = 3, BEND = 4,
  * @property {number} [volume] 0..127
  * @property {number|Patch} [patch] an index into `patches` (IMS) or the patch itself (ROL)
  * @property {number} [bend] 14-bit, 0x2000 centred
+ * @property {number} [pan] one of the PAN_* values; ignored by a mono chip
  * @property {number} [tempo] beats per minute
  * @property {number} [order] tie-break within a tick, for ROL's parallel tracks
  */
@@ -42,10 +46,12 @@ export class Sequencer {
    * @param {number} [opts.pitchRange]
    * @param {(Patch|null)[]} [opts.patches] resolved bank patches, by index
    * @param {number} [opts.sampleRate]      defaults to the chip's native rate
+   * @param {boolean} [opts.opl3]           drive the chip as a YMF262;
+   *   defaults to whatever the chip says it is
    */
   constructor(opts) {
     this.chip = opts.chip;
-    this.driver = new AdlibDriver(opts.chip);
+    this.driver = new AdlibDriver(opts.chip, { opl3: opts.opl3 ?? !!opts.chip.opl3 });
     this.makeEvents = opts.events;
     this.tickBeat = opts.tickBeat || 240;
     this.baseTempo = opts.tempo || 120;
@@ -75,7 +81,7 @@ export class Sequencer {
     // its own state. The epoch saves a display from diffing eleven strings a
     // frame when patch changes are a handful an entire song.
     /** @type {string[]} */
-    this.voicePatchName = new Array(11).fill("");
+    this.voicePatchName = new Array(METER_VOICES).fill("");
     /** @type {number} */
     this.patchEpoch = (this.patchEpoch | 0) + 1;   // never repeats, so a reset shows
   }
@@ -120,6 +126,9 @@ export class Sequencer {
       case BEND:
         d.setVoicePitch(ev.voice, ev.bend);
         break;
+      case PAN:
+        d.setVoicePan(ev.voice, ev.pan);
+        break;
       case TEMPO:
         this.tempo = ev.tempo;
         break;
@@ -152,7 +161,7 @@ export class Sequencer {
     this.tick = 0;
     this.ended = false;
     this.tempo = this.baseTempo;
-    for (let v = 0; v <= (this.percussive ? HH : 8); v++) this.driver.noteOff(v);
+    for (let v = 0; v < this.driver.voiceCount; v++) this.driver.noteOff(v);
   }
 
   /**
@@ -166,6 +175,22 @@ export class Sequencer {
    * @returns {number}
    */
   render(out, offset, count) {
+    return this.#run(out, null, offset, count);
+  }
+
+  /**
+   * The same, as two channels. Only a chip with the stereo switches has
+   * anything different to put in them; see `OplChip.generateStereo`.
+   *
+   * @param {Float32Array} left @param {Float32Array} right
+   * @param {number} offset @param {number} count
+   * @returns {number}
+   */
+  renderStereo(left, right, offset, count) {
+    return this.#run(left, right, offset, count);
+  }
+
+  #run(out, right, offset, count) {
     let written = 0;
     while (written < count) {
       if (this.sampleCursor <= 0) {
@@ -179,12 +204,16 @@ export class Sequencer {
         this.tick = nextTick;
       }
       const run = Math.min(count - written, Math.max(1, Math.floor(this.sampleCursor)));
-      this.chip.generate(out, offset + written, run);
+      if (right) this.chip.generateStereo(out, right, offset + written, run);
+      else this.chip.generate(out, offset + written, run);
       this.sampleCursor -= run;
       this.samplesRendered += run;
       written += run;
     }
-    if (written < count) out.fill(0, offset + written, offset + count);
+    if (written < count) {
+      out.fill(0, offset + written, offset + count);
+      if (right) right.fill(0, offset + written, offset + count);
+    }
     return written;
   }
 }
@@ -274,40 +303,122 @@ export function rolSequence(song, resolve) {
 }
 
 /**
+ * The voice layout `sopSequence` writes for when it is given none: a YM3812,
+ * which is what this library ran a SOP on before there was an OPL3 core.
+ * @param {import("./formats.js").SopSong} song
+ */
+function opl2Layout(song) {
+  return {
+    melodicVoices: song.percussive ? BD : 9,
+    rhythmBase: BD,
+    fourOpPairs: [],
+  };
+}
+
+/**
+ * SOP §4.2 panning: 0 is right, 1 is middle, 2 is left. Anything else is one
+ * of the three corrupt events the corpus carries, and goes to the middle.
+ */
+function sopPan(value) {
+  return value === 0 ? PAN_RIGHT : value === 2 ? PAN_LEFT : PAN_CENTRE;
+}
+
+/**
  * Flatten a SOP song into sequencer events. SOP §8.
  *
- * This is the one place in the library that knowingly plays something other
- * than what the file says, so it is worth being blunt about why. SOP is an
- * **OPL3** format: twenty voices, four-operator instruments, stereo panning.
- * The chip under this library is an OPL2 with nine voices, or six plus the
- * five rhythm instruments. The format does not fit, and 298 of the 336 corpus
- * files ask for more melodic voices than an OPL2 has -- 114 of them use all
- * twenty tracks. So this is a reduction, not a rendering:
+ * `layout` says what the chip underneath actually has, and everything that
+ * follows is a consequence of it:
  *
  * - **Rhythm tracks keep their voice.** In percussive mode, track slots 6..10
  *   are the bass drum, snare, tom, cymbal and hi-hat, which the corpus shows
- *   plainly (SOP §7), and those map one to one onto the driver's BD..HH.
- * - **Melodic tracks share what is left**, six voices in percussive mode and
- *   nine otherwise, allocated per note. A track keeps its voice while its note
- *   sounds; when every voice is busy the one whose note ends soonest is cut
- *   short, because that is the note that had least left to lose.
- * - **Panning is dropped.** The chip is mono. So are the four-op instruments'
- *   second operator pair, and the OPL3 wave selects; see `sopPatch`.
+ *   plainly (SOP §7), and those map one to one onto the five rhythm voices
+ *   wherever the chip puts them -- 6..10 on a YM3812, 15..19 on a YMF262.
+ * - **Four-operator tracks get a four-operator voice, while there are any.**
+ *   SOP §2 marks each track's kind in the channel-mode table, and mode 1 is
+ *   the YMF262's four-operator channel. A chip offers at most six of those and
+ *   each costs two channels, so the mode-1 tracks take them in track order and
+ *   any left over fall back to two operators. The voice is fixed for the whole
+ *   song rather than allocated per note: joining and splitting a channel pair
+ *   is a register write that reaches the whole pair, so a wide voice that came
+ *   and went would take a narrow one with it.
+ * - **Everything else shares what is left**, allocated per note. A track keeps
+ *   its voice while its note sounds; when every voice is busy the one whose
+ *   note ends soonest is cut short, because that is the note that had least
+ *   left to lose. On a YMF262 in rhythm mode with no four-operator tracks
+ *   there are fifteen of those and five drums, which is exactly the twenty the
+ *   format asks for, and nothing is cut at all.
+ * - **Panning is a voice setting**, so it is emitted per voice rather than per
+ *   track, and lands wherever the track's notes landed. A mono chip drops it.
  *
- * What comes out is the song as an OPL2 could have played it, which is not
- * the song. Anything wanting the real thing needs an OPL3 core.
+ * On a nine-voice chip this is still a reduction -- 298 of the 336 corpus files
+ * ask for more melodic voices than an OPL2 has -- and passing no layout is how
+ * to ask for that reduction on purpose.
  *
  * @param {import("./formats.js").SopSong} song
+ * @param {{melodicVoices:number, rhythmBase:number, fourOpPairs:number[][]}} [layout]
  * @returns {SeqEvent[]}
  */
-export function sopSequence(song) {
+export function sopSequence(song, layout) {
   const percussive = song.percussive;
-  const melodicVoices = percussive ? BD : 9;
+  const plan = layout ?? opl2Layout(song);
+  const melodicVoices = plan.melodicVoices;
+  const rhythmBase = plan.rhythmBase;
+  const voiceSlots = Math.max(melodicVoices, rhythmBase + RHYTHM_VOICES);
   const patches = song.instruments.map(sopPatch);
   const nTracks = song.tracks.length;
 
-  /** Percussive mode parks the five rhythm instruments on their own slots. */
-  const rhythmVoiceOf = (t) => (percussive && t >= BD && t <= HH ? t : -1);
+  // §4.1: the five rhythm tracks are track slots 6..10 whatever the chip is.
+  // Those are numbers the format fixes, not the chip.
+  const rhythmVoiceOf = (t) =>
+    (percussive && t >= 6 && t < 6 + RHYTHM_VOICES ? rhythmBase + (t - 6) : -1);
+
+  // §2: hand the four-operator channel pairs to the tracks that asked for one.
+  //
+  // Two ways of asking, and the file can do either: the channel-mode table
+  // says 1, or the track selects a type-0 instrument. Mode is the format's own
+  // declaration so it goes first, but instrument choice cannot be ignored --
+  // four corpus files select a four-operator instrument on a track they never
+  // marked, and they mean it just as much.
+  const wantsFour = (t) => {
+    if (rhythmVoiceOf(t) >= 0) return 0;
+    if ((song.tracks[t].mode & 0x7f) === 1) return 2;
+    for (const ev of song.tracks[t].events) {
+      if (ev.code === 6 && patches[ev.value] && patches[ev.value].pair) return 1;
+    }
+    return 0;
+  };
+  const wideOf = new Array(nTracks).fill(-1);
+  const spokenFor = new Set();
+  const pairs = (plan.fourOpPairs ?? [])
+    .filter(([head, slave]) => head < melodicVoices && slave < melodicVoices);
+  const asking = [];
+  for (let t = 0; t < nTracks; t++) {
+    const want = wantsFour(t);
+    if (want) asking.push({ t, want });
+  }
+  // Declared first, then merely implied, and inside each in track order -- so
+  // which tracks lose out when there are more than six is a property of the
+  // file rather than of the order this loop happens to run in.
+  asking.sort((a, b) => b.want - a.want || a.t - b.t);
+  asking.slice(0, pairs.length).forEach(({ t }, i) => {
+    const [head, slave] = pairs[i];
+    wideOf[t] = head;
+    spokenFor.add(head);
+    spokenFor.add(slave);
+  });
+  /** The voices left for ordinary two-operator notes to share. */
+  const pool = [];
+  for (let v = 0; v < melodicVoices; v++) if (!spokenFor.has(v)) pool.push(v);
+
+  // Joining a channel pair is a register write that silences the slave, so a
+  // four-operator patch must never reach a voice the plan did not set aside --
+  // it would take a voice another track is playing on with it. Anywhere else
+  // the instrument is played on its first operator pair, which is what a
+  // YM3812 does with it too (SOP §8).
+  const narrowed = patches.map((p) => (p && p.pair ? { ...p, pair: undefined } : p));
+  const wideVoices = new Set(pairs.slice(0, asking.length).map(([head]) => head));
+  const patchFor = (voice, index) =>
+    (wideVoices.has(voice) ? patches : narrowed)[index];
 
   // Merge every track with the control track, keeping file order inside each.
   // Array.prototype.sort is stable, so sorting on (tick, source) alone leaves
@@ -325,19 +436,21 @@ export function sopSequence(song) {
   const trackPatch = new Array(nTracks).fill(-1);
   const trackVolume = new Array(nTracks).fill(127);
   const trackBend = new Array(nTracks).fill(100);     // §4.2: 100 is centre
+  const trackPan = new Array(nTracks).fill(-1);
   const trackVoice = new Array(nTracks).fill(-1);
   const touched = new Array(nTracks).fill(false);
-  const voiceTrack = new Array(melodicVoices).fill(-1);
-  const voiceEnd = new Int32Array(melodicVoices);
+  const voiceTrack = new Array(voiceSlots).fill(-1);
+  const voiceEnd = new Int32Array(voiceSlots);
+  const voicePan = new Array(voiceSlots).fill(-1);
   /** The note-off already emitted for each voice, so that a steal can pull it in. */
-  const voiceOff = new Array(11).fill(null);
-  // -2 is "nothing loaded", -1 is "the fallback below". A track that never
-  // sends an instrument-select still has to make a sound: ST-BGM.SOP has 4878
-  // notes and not one event 6, so it is relying on whatever the editor had
-  // loaded. The first instrument that yields a patch is the least-invented
-  // stand-in for that.
-  const voicePatch = new Array(11).fill(-2);
-  const fallback = patches.find((p) => p) ?? null;
+  const voiceOff = new Array(voiceSlots).fill(null);
+  // -2 is "nothing loaded". A track that never sends an instrument-select still
+  // has to make a sound: ST-BGM.SOP has 4878 notes and not one event 6, so it
+  // is relying on whatever the editor had loaded. The first instrument that
+  // yields a patch is the least-invented stand-in for that, and using its own
+  // index rather than a sentinel keeps the "already loaded" check honest.
+  const voicePatch = new Array(voiceSlots).fill(-2);
+  const fallbackIndex = patches.findIndex((p) => p);
 
   // §4.2: volume is 0..127 and so is the driver's, but the control track's
   // global volume scales all of it, and that is how SOP fades a whole song.
@@ -351,16 +464,26 @@ export function sopSequence(song) {
 
   const emitVolume = (tick, voice, t) =>
     out.push({ tick, type: VOLUME, voice, volume: volumeOf(t), order: 2 });
+  /** Panning belongs to the voice, so it is only worth sending when it moves. */
+  const emitPan = (tick, voice, t) => {
+    if (trackPan[t] < 0 || voicePan[voice] === trackPan[t]) return;
+    voicePan[voice] = trackPan[t];
+    out.push({ tick, type: PAN, voice, pan: sopPan(trackPan[t]), order: 2 });
+  };
+
+  /** The voice a track owns outright: a drum's, or a four-operator one. */
+  const fixedVoiceOf = (t) => {
+    const rhythm = rhythmVoiceOf(t);
+    return rhythm >= 0 ? rhythm : wideOf[t];
+  };
 
   /** A voice for a melodic track's note: its own, a free one, or a stolen one. */
   const allocate = (t, tick) => {
     const own = trackVoice[t];
     if (own >= 0 && voiceTrack[own] === t) return own;
-    for (let v = 0; v < melodicVoices; v++) {
-      if (voiceTrack[v] < 0 || voiceEnd[v] <= tick) return v;
-    }
-    let best = 0;
-    for (let v = 1; v < melodicVoices; v++) if (voiceEnd[v] < voiceEnd[best]) best = v;
+    for (const v of pool) if (voiceTrack[v] < 0 || voiceEnd[v] <= tick) return v;
+    let best = pool[0];
+    for (const v of pool) if (voiceEnd[v] < voiceEnd[best]) best = v;
     return best;
   };
 
@@ -374,7 +497,7 @@ export function sopSequence(song) {
         globalVolume = ev.value;
         for (let t = 0; t < nTracks; t++) {
           if (!touched[t]) continue;
-          const voice = rhythmVoiceOf(t);
+          const voice = fixedVoiceOf(t);
           if (voice >= 0) emitVolume(ev.tick, voice, t);
           else if (trackVoice[t] >= 0 && voiceTrack[trackVoice[t]] === t) {
             emitVolume(ev.tick, trackVoice[t], t);
@@ -384,8 +507,9 @@ export function sopSequence(song) {
       continue;
     }
     touched[track] = true;
-    const held = rhythmVoiceOf(track) >= 0
-      ? rhythmVoiceOf(track)
+    const fixed = fixedVoiceOf(track);
+    const held = fixed >= 0
+      ? fixed
       : (trackVoice[track] >= 0 && voiceTrack[trackVoice[track]] === track
         ? trackVoice[track] : -1);
 
@@ -393,7 +517,7 @@ export function sopSequence(song) {
       case 6:                                                // §4.2: instrument
         trackPatch[track] = ev.value;
         if (held >= 0 && voicePatch[held] !== ev.value && patches[ev.value]) {
-          out.push({ tick: ev.tick, type: PATCH, voice: held, patch: patches[ev.value], order: 1 });
+          out.push({ tick: ev.tick, type: PATCH, voice: held, patch: patchFor(held, ev.value), order: 1 });
           voicePatch[held] = ev.value;
         }
         break;
@@ -405,12 +529,16 @@ export function sopSequence(song) {
         trackBend[track] = ev.value;
         if (held >= 0) out.push({ tick: ev.tick, type: BEND, voice: held, bend: bendOf(track), order: 2 });
         break;
+      case 7:                                                // §4.2: panning
+        trackPan[track] = ev.value;
+        if (held >= 0) emitPan(ev.tick, held, track);
+        break;
       case 2: {                                              // §4.2: note on
         // §4.2 gives a note its length up front, which is what makes a static
         // allocator possible at all: the sequencer knows when each voice frees.
         const length = Math.max(1, ev.length ?? 1);
         const endTick = ev.tick + length;
-        let voice = rhythmVoiceOf(track);
+        let voice = fixed;
         if (voice < 0) {
           voice = allocate(track, ev.tick);
           const previous = voiceTrack[voice];
@@ -425,13 +553,14 @@ export function sopSequence(song) {
         // note's length would otherwise have the first one's off cut the second.
         if (voiceOff[voice] && voiceOff[voice].tick > ev.tick) voiceOff[voice].tick = ev.tick;
         const chosen = trackPatch[track] >= 0 && patches[trackPatch[track]]
-          ? trackPatch[track] : -1;
-        const patch = chosen >= 0 ? patches[chosen] : fallback;
+          ? trackPatch[track] : fallbackIndex;
+        const patch = chosen >= 0 ? patchFor(voice, chosen) : null;
         if (patch && voicePatch[voice] !== chosen) {
           out.push({ tick: ev.tick, type: PATCH, voice, patch, order: 1 });
           voicePatch[voice] = chosen;
         }
         emitVolume(ev.tick, voice, track);
+        emitPan(ev.tick, voice, track);
         out.push({ tick: ev.tick, type: BEND, voice, bend: bendOf(track), order: 2 });
         out.push({ tick: ev.tick, type: NOTE_ON, voice, note: ev.value, order: 4 });
         const off = { tick: endTick, type: NOTE_OFF, voice, order: 3 };
@@ -440,9 +569,8 @@ export function sopSequence(song) {
         break;
       }
       default:
-        // §4.2: 7 is panning, which a mono chip has nowhere to put, and 1 is
-        // the "special event" nobody has ever explained -- 7 of it in the
-        // whole corpus. Both are dropped rather than guessed at.
+        // §4.2: 1 is the "special event" nobody has ever explained -- 7 of it
+        // in the whole corpus. It is dropped rather than guessed at.
         break;
     }
   }

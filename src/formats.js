@@ -43,12 +43,21 @@ export class FormatError extends Error {}
 
 /**
  * A named instrument: two operators and their waveform selects. §2.3.
+ *
+ * `pair` is the second half of a four-operator instrument, and only a `.sop`
+ * type-0 instrument has one (SOP §3.3). It is an ordinary Patch itself -- the
+ * same eleven bytes read the same way -- so a caller that knows nothing about
+ * four-operator voices reads the first pair and is right about it. The driver
+ * loads the second pair where the chip has somewhere to put it, and ignores it
+ * where it does not.
+ *
  * @typedef {object} Patch
  * @property {string} name
  * @property {Operator} modulator
  * @property {Operator} carrier
  * @property {number} modWave
  * @property {number} carWave
+ * @property {Patch} [pair] operators 3 and 4, for a four-operator instrument
  */
 
 /**
@@ -674,20 +683,38 @@ function sopOperator(char, scale, attackDecay, sustainRelease, feedback) {
 }
 
 /**
+ * One eleven-byte operator pair, as a Patch. SOP §3.2.
+ *
+ * `singleOp` is the rhythm-voice reading: types 7..10 are one operator, and in
+ * those everything from the feedback byte on is uninitialised -- 81% of corpus
+ * hi-hats put something out of range in it. Those bytes are zeroed rather than
+ * passed on; the driver never reads them back for a rhythm voice anyway.
+ */
+function sopPair(name, d, at, singleOp) {
+  const feedback = singleOp ? 0 : d[at + 5];
+  return {
+    name,
+    modulator: sopOperator(d[at], d[at + 1], d[at + 2], d[at + 3], feedback),
+    carrier: singleOp
+      ? sopOperator(0, 0, 0, 0, 0)
+      : sopOperator(d[at + 6], d[at + 7], d[at + 8], d[at + 9], feedback),
+    // Wave selects 4..7 are the OPL3's. They pass through as the file stores
+    // them; the driver masks them to what its chip can actually reach.
+    modWave: d[at + 4],
+    carWave: singleOp ? 0 : d[at + 10],
+  };
+}
+
+/**
  * Turn a SOP instrument into the shape a BNK patch has, so that the driver can
  * load it. Returns null for a comment (type 12) and for anything whose data
  * the file cut short.
  *
- * Two degradations, both of them the OPL2's doing rather than the format's,
- * and both spelled out in SOP §8:
- *
- * - A four-op instrument (type 0) is two of these back to back. This takes the
- *   first pair, because an OPL2 voice has two operators and no fourth-operator
- *   register to put the rest in.
- * - Types 7..10 are single-operator rhythm voices, and in those the carrier
- *   bytes and the feedback byte are uninitialised -- 81% of corpus hi-hats put
- *   something out of range in the feedback byte. They are zeroed rather than
- *   passed on; the driver never reads them back for a rhythm voice anyway.
+ * A four-operator instrument (type 0) is two of these back to back, and comes
+ * back as a patch carrying its second pair in `pair`. What happens to that pair
+ * is the chip's business rather than the format's: a YMF262 joins two channels
+ * and plays all four operators, and a YM3812 has no fourth-operator register to
+ * put them in and plays the first pair alone. SOP §8.
  *
  * @param {SopInstrument} inst
  * @returns {Patch|null}
@@ -696,17 +723,11 @@ export function sopPatch(inst) {
   const d = inst.data;
   if (inst.type === 12 || d.length < 11) return null;
   const singleOp = inst.type >= 7 && inst.type <= 10;
-  const feedback = singleOp ? 0 : d[5];
-  return {
-    name: inst.shortName,
-    modulator: sopOperator(d[0], d[1], d[2], d[3], feedback),
-    carrier: singleOp
-      ? sopOperator(0, 0, 0, 0, 0)
-      : sopOperator(d[6], d[7], d[8], d[9], feedback),
-    // Wave selects 4..7 are OPL3's; the driver masks them to the OPL2's four.
-    modWave: d[4],
-    carWave: singleOp ? 0 : d[10],
-  };
+  const patch = sopPair(inst.shortName, d, 0, singleOp);
+  // §3.3: the second pair sits at register offsets 0x08/0x0B with its own
+  // feedback byte, which is the same eleven-byte layout eleven bytes along.
+  if (inst.type === 0 && d.length >= 22) patch.pair = sopPair(inst.shortName, d, 11, false);
+  return patch;
 }
 
 /**

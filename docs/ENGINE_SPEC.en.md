@@ -1,6 +1,8 @@
 # Iyagi Music Sound — playback engine specification
 
-How an `.ims` or `.rol` file is turned into OPL2 (YM3812) register writes.
+How an `.ims` or `.rol` file is turned into OPL2 (YM3812) register writes —
+and, in §10 and §11, what changes when the chip underneath is an OPL3
+(YMF262) instead.
 
 The behaviour described here is that of AdLib's own low-level driver, the one
 shipped with the *AdLib Programmer's Manual* and reused by essentially every
@@ -50,6 +52,15 @@ Per-voice state an implementation must keep:
 - `bxCache[9]` — last value written to register 0xB0+v
 - `volume[11]` — 0–127, one per *logical* voice (so 11, not 9)
 - `percBits` — the five rhythm key-on bits
+
+**On a YMF262 the same model has eighteen channels** and therefore 18 logical
+voices, or 15 + 5 in percussive mode, because the rhythm instruments still take
+over channels 6, 7 and 8 of the *first* bank and the second bank keeps all
+nine. The numbering follows one rule on either chip: melodic voices in channel
+order, then the five rhythm voices on the end. **The rhythm voices are always
+the last five**, whether that is 6–10 of eleven or 15–19 of twenty, which is
+what lets a display index a voice without knowing which chip it is looking at.
+See §10 and §11 for what else changes; nothing in §2 through §9 does.
 
 ## 2. Reset
 
@@ -288,10 +299,98 @@ in a loop until a non-zero delay appears, then render.
 For ROL, the same formula applies with the ROL header's `tickBeat` and
 `basicTempo`, and the tempo track's multipliers.
 
-## 10. Emulation notes
+## 10. Four-operator voices (OPL3)
+
+**This section and §11 are not AdLib's driver.** They describe the same
+algorithm generalised to a YMF262, which `.ims` and `.rol` never ask for and
+`.sop` needs (SOP_FORMAT.en.md §8). A YM3812 implementation can stop at §9.
+
+A YMF262 is this machine twice over: the same nine channels, the same eighteen
+operators, the same register numbers, at `reg | 0x100`. Everything in §1
+through §9 applies unchanged to each bank. Voice *v* of the second bank uses
+`opOffset(v − 9, o) + 0x100`, and its 0xA0/0xB0/0xC0 registers are
+`0xA0 + (v − 9) + 0x100` and so on.
+
+Two registers exist only in the second bank:
+
+| Register | Bits | Meaning |
+|---|---|---|
+| 0x105 | 0 | **NEW.** Everything in §10 and §11 is ignored until this is set, including the second bank itself. |
+| 0x104 | 0–5 | One bit per joinable channel pair, in the order below. |
+
+**Set 0x105 first.** Writing the second bank before NEW does nothing at all,
+so a reset that zeroes 0x000–0x1F5 must set NEW before it starts, not after.
+
+### 10.1 Which pairs can be joined
+
+Six, and only six — a channel and the one three above it, in the same bank:
+
+| Bit of 0x104 | Channels |
+|---|---|
+| 0 | 0 and 3 |
+| 1 | 1 and 4 |
+| 2 | 2 and 5 |
+| 3 | 9 and 12 |
+| 4 | 10 and 13 |
+| 5 | 11 and 14 |
+
+The lower channel of a pair is its **head**: the joined voice is addressed by
+the head's registers, and the upper channel — the **slave** — stops being a
+voice of its own. Its key-on bit is not read, its F-number is not read, and it
+produces no output; its two operators are read as operators 3 and 4 of the
+head's voice. A player that allocates voices must therefore take the slave out
+of circulation for as long as the pair is joined, or the notes it puts there
+will vanish.
+
+The rhythm mode is unaffected: it lives on channels 6, 7 and 8 of the first
+bank, and none of those is in a pair.
+
+### 10.2 The four connections
+
+Each half keeps its own CNT bit in its own 0xC0. Reading CNT as *"this half's
+first operator goes straight to the output instead of modulating"* gives all
+four connections at once:
+
+| CNT of head | CNT of slave | Connection |
+|---|---|---|
+| 0 | 0 | 1 → 2 → 3 → 4 |
+| 0 | 1 | 1 → 2 → 3, and 4 |
+| 1 | 0 | 1, and 2 → 3 → 4 |
+| 1 | 1 | 1, and 2 → 3, and 4 |
+
+Feedback belongs to operator 1 alone; the slave's feedback setting has nothing
+to act on, because operator 3 is fed by the chain rather than by itself.
+
+**§4's volume rule generalises through that table.** Channel volume scales the
+operators that reach the output and leaves the ones that only modulate alone,
+so it applies to operator 4 always, to operator 1 when the head's CNT is 1, to
+operator 3 when the slave's CNT is 1, and to operator 2 never. Note that this
+depends on *both* halves' CNT bits, so loading the first pair's levels before
+the second pair's connection is known gets them wrong — send all four
+operators' 0x40 again once both halves are in.
+
+## 11. Stereo (OPL3)
+
+Bits 4 and 5 of each channel's 0xC0 are output enables, not a pan knob: bit 4
+routes the channel to the left output and bit 5 to the right. Both is centre.
+
+**Neither is silence, and neither is where a YMF262 comes up.** A driver that
+sets NEW and then never writes 0xC0 is mute. Write both bits on every channel
+at reset; a driver that has no idea about panning then behaves exactly as it
+did on a YM3812.
+
+A joined pair (§10) is two channels, and the simplest thing that is always
+right is to write the same two bits to both halves.
+
+## 12. Emulation notes
 
 These files were written for a real YM3812 at 3.579545 MHz. Anything that
 implements the register set faithfully will do; the format makes no use of
 timers, no use of the 0x08 note-select bit, and no use of AM/vibrato depth.
 Wave select is used, so an OPL1-only emulation (sine only) will sound wrong on
 a large fraction of the corpus.
+
+A YMF262 plays them too, and plays them identically, because it comes up as a
+YM3812 and stays one until 0x105 says otherwise. That is worth testing rather
+than assuming: `test/opl3.test.js` renders the same song on both and compares
+sample for sample.

@@ -263,6 +263,7 @@ test("the corpus stays inside the documented value ranges", { skip: !have }, () 
 
 test("a corpus SOP renders audible audio", { skip: !have }, () => {
   for (const fn of ["2REBIBLE.SOP", "4OPDANCE.SOP", "JE-ISAK2.SOP"]) {
+    // No `chip` option: a .sop gets the YMF262 it was written for.
     const m = new IyagiMusic({ song: read(fn), sampleRate: 48000 });
     assert.equal(m.kind, "sop");
     assert.deepEqual(m.missing, [], `${fn}: a SOP carries its own instruments`);
@@ -274,17 +275,23 @@ test("a corpus SOP renders audible audio", { skip: !have }, () => {
   }
 });
 
-test("a four-op SOP still plays, on the first operator pair", { skip: !have }, () => {
-  // §8: 61 corpus files carry four-op instruments. They must not throw and must
-  // not go silent -- half an instrument is still an instrument.
-  const fn = sopFiles().find((f) => parseSop(read(f)).instruments.some((i) => i.type === 0));
-  const song = parseSop(read(fn));
-  const four = song.instruments.find((i) => i.type === 0);
-  assert.equal(four.data.length, 22);
-  const p = sopPatch(four);
-  assert.ok(p, "a four-op instrument must still yield a patch");
-  assert.ok(p.modWave <= 7 && p.carWave <= 7, "§3.3: bytes 4 and 10 are wave selects");
-  const m = new IyagiMusic({ song: read(fn), sampleRate: 48000 });
-  const pcm = m.renderAll(5);
-  assert.ok(Math.sqrt(pcm.reduce((s, v) => s + v * v, 0) / pcm.length) > 0.005, `${fn}: silent`);
-});
+test("a four-op SOP still plays on the OPL2's first operator pair",
+  { skip: !have }, () => {
+    // §8: 61 corpus files carry four-op instruments, and a YM3812 has nowhere
+    // to put the second pair. Half an instrument is still an instrument, so
+    // this must not throw and must not go silent -- the reduction is a
+    // documented fallback, not a dead branch. What an OPL3 does with the same
+    // files is `opl3.test.js`.
+    const fn = sopFiles().find((f) => parseSop(read(f)).instruments.some((i) => i.type === 0));
+    const song = parseSop(read(fn));
+    const four = song.instruments.find((i) => i.type === 0);
+    assert.equal(four.data.length, 22);
+    const p = sopPatch(four);
+    assert.ok(p, "a four-op instrument must still yield a patch");
+    assert.ok(p.modWave <= 7 && p.carWave <= 7, "§3.3: bytes 4 and 10 are wave selects");
+    assert.ok(p.pair, "§3.3: the second operator pair belongs to the patch");
+    const m = new IyagiMusic({ song: read(fn), sampleRate: 48000, chip: "opl2" });
+    assert.equal(m.chip.opl3, false);
+    const pcm = m.renderAll(5);
+    assert.ok(Math.sqrt(pcm.reduce((s, v) => s + v * v, 0) / pcm.length) > 0.005, `${fn}: silent`);
+  });

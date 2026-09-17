@@ -6,6 +6,11 @@ emulator — the ones available are all GPL or LGPL and this repository is not,
 and in any case a reimplementation is only worth having if you can say where
 each number came from. This file is that accounting.
 
+It is also the core of the OPL3, which is the same silicon with more of it:
+everything below applies to both chips, and what the YMF262 *adds* — the
+second register bank, four-operator channels, stereo and waveforms 4–7 — is
+accounted for separately in `OPL3_NOTES.en.md`.
+
 The primary source is Yamaha's own *YM3812 Application Manual*, cited below by
 section and table number. Where it is silent — it never describes how the
 rhythm voices are generated, only how to voice them — the source is the
@@ -130,9 +135,16 @@ makes some songs play with the wrong instruments and others fall silent.
 ## Deliberately absent
 
 The formats never touch these, so they are not implemented: the two timers and
-their status flags, CSM mode, the composite sine mode of the OPL2's status
-register, and anything OPL3 (four-operator channels, the second register bank,
-stereo, waveforms 4–7).
+their status flags, CSM mode, and the composite sine mode of the OPL2's status
+register.
+
+The OPL3's additions — the second register bank, four-operator channels,
+stereo and waveforms 4–7 — **used to be on that list and are not any more.**
+`.sop` is an OPL3 format and needs every one of them; `OPL3_NOTES.en.md`
+accounts for them. They cost this file nothing: all four hang off register
+0x105, so a YM3812 is what the core is before anything sets it, and
+`test/opl3.test.js` renders the same song on both chips and diffs it to keep
+that true.
 
 ## If you want it exact
 

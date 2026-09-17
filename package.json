@@ -1,10 +1,10 @@
 {
   "name": "iyagimusic",
   "version": "1.0.0",
-  "description": "Player and format specification for Iyagi Music Sound (.ims) and AdLib ROL (.rol) -- early-1990s Korean BBS music for the AdLib card (YM3812/OPL2), with a clean-room OPL2 emulator and a 2-byte Johab decoder.",
+  "description": "Player and format specification for Iyagi Music Sound (.ims), AdLib ROL (.rol) and SOP (.sop) -- 1990s Korean BBS music for the AdLib card, with a clean-room OPL2 (YM3812) and OPL3 (YMF262) emulator and a 2-byte Johab decoder.",
   "keywords": [
-    "adlib", "opl2", "opl", "ym3812", "fm-synthesis", "chiptune",
-    "ims", "rol", "bnk", "iss", "iyagi", "이야기",
+    "adlib", "opl2", "opl3", "opl", "ym3812", "ymf262", "fm-synthesis", "chiptune",
+    "ims", "rol", "bnk", "iss", "sop", "iyagi", "이야기",
     "johab", "조합형", "hangul", "korean", "pc통신",
     "audioworklet", "emulator", "retrocomputing"
   ],

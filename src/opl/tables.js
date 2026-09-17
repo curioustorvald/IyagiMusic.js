@@ -1,8 +1,11 @@
-// OPL2 lookup tables. All of them are computed here from their closed forms
-// rather than pasted in, so the derivation is the documentation. The two the
-// chip really does hold in ROM (log-sin, exp) come out bit-exact; the KSL
+// OPL2 and OPL3 lookup tables. All of them are computed here from their closed
+// forms rather than pasted in, so the derivation is the documentation. The two
+// the chip really does hold in ROM (log-sin, exp) come out bit-exact; the KSL
 // table is stated because three of its sixteen entries round differently from
 // the closed form, and the difference is 0.75 dB.
+//
+// The OPL3 adds no tables. Its four extra waveforms are the same quarter sine
+// read differently, and `waveform` below builds them out of LOG_SIN.
 
 import { ENV_MAX } from "./constants.js";
 
@@ -119,6 +122,26 @@ export const EG_DUTY = Object.freeze([
  * Waveform lookup: turn a 10-bit phase into a log-domain attenuation and a
  * sign. Returns the attenuation; `outSign[0]` receives −1 or +1, and a
  * silenced quarter returns SILENCE.
+ *
+ * Shapes 0…3 are the OPL2's, selected by register 0xE0 once 0x01 bit 5 is set.
+ * Shapes 4…7 are the OPL3's four additions, which register 0xE0 can only reach
+ * once 0x105 bit 0 (NEW) is set. Every one of the eight is the same quarter
+ * sine read differently — the chip holds one table, not eight — so they are
+ * built here out of LOG_SIN rather than stated.
+ *
+ * The four new shapes, as the YMF262's published waveform figure draws them:
+ *
+ *   4  the sine at double rate, and silence through the second half
+ *   5  the same, rectified: two humps and then silence
+ *   6  a square wave — no attenuation at all, just the sine's sign
+ *   7  a logarithmic sawtooth: a straight line in the *attenuation* domain,
+ *      0 dB down to silence across each half cycle, sign alternating
+ *
+ * Shape 7 is the only one that is not a rearrangement of the sine, and its
+ * slope is fixed by the domain rather than chosen: a 9-bit ramp scaled by 8
+ * spans 0…0xFF8, which is the same 96 dB the envelope and the exponential
+ * table span. One half cycle is therefore exactly the chip's whole dynamic
+ * range, top to bottom.
  */
 export const SILENCE = 0x1000;
 
@@ -127,7 +150,7 @@ export function waveform(shape, phase, outSign) {
   const quarter = phase & 0xff;
   const mirrored = (phase & 0x100) !== 0 ? 255 - quarter : quarter;
   const negative = (phase & 0x200) !== 0;
-  switch (shape & 3) {
+  switch (shape & 7) {
     case 0:                                        // full sine
       outSign[0] = negative ? -1 : 1;
       return LOG_SIN[mirrored];
@@ -137,11 +160,41 @@ export function waveform(shape, phase, outSign) {
     case 2:                                        // absolute sine
       outSign[0] = 1;
       return LOG_SIN[mirrored];
-    default:                                       // pulse sine: rising quarters
+    case 3:                                        // pulse sine: rising quarters
       outSign[0] = 1;
       return (phase & 0x100) !== 0 ? SILENCE : LOG_SIN[quarter];
+    case 4: {                                      // even sine: double rate, then silence
+      outSign[0] = 1;
+      if (negative) return SILENCE;
+      // The first half cycle is stretched over a whole one, sign and all.
+      const p = (phase << 1) & 0x3ff;
+      const q = p & 0xff;
+      outSign[0] = (p & 0x200) !== 0 ? -1 : 1;
+      return LOG_SIN[(p & 0x100) !== 0 ? 255 - q : q];
+    }
+    case 5: {                                      // even absolute sine
+      outSign[0] = 1;
+      if (negative) return SILENCE;
+      // As shape 4, but bit 9 -- the sign -- is dropped rather than read.
+      const p = (phase << 1) & 0x1ff;
+      const q = p & 0xff;
+      return LOG_SIN[(p & 0x100) !== 0 ? 255 - q : q];
+    }
+    case 6:                                        // square
+      outSign[0] = negative ? -1 : 1;
+      return 0;
+    default: {                                     // logarithmic sawtooth
+      outSign[0] = negative ? -1 : 1;
+      // Down across the first half, and back up across the second, so that the
+      // two halves meet at silence rather than at a step.
+      const ramp = phase & 0x1ff;
+      return (negative ? 0x1ff - ramp : ramp) << 3;
+    }
   }
 }
+
+/** How many waveforms register 0xE0 can select, by whether NEW is set. */
+export const WAVE_MASK_OPL2 = 3, WAVE_MASK_OPL3 = 7;
 
 // ── Low-frequency oscillators ─────────────────────────────────────────────
 // Both are free-running and shared by every operator that opts in.

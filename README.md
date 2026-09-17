@@ -17,7 +17,7 @@
 | 포맷 명세 (`.ims` / `.bnk` / `.rol` / `.iss`) | 있음 |
 | 재생 엔진 명세 | 있음 |
 | 조합형 → 유니코드 변환기 (JS / Python) | 있음, 검증됨 |
-| OPL2(YM3812) 에뮬레이터 | 있음, 자체 구현 |
+| OPL2(YM3812) · OPL3(YMF262) 에뮬레이터 | 있음, 자체 구현 |
 | 재생 라이브러리 | 있음 (npm `iyagimusic`) |
 | 프런트엔드 플레이어 | 있음 (`IyagiMusic-web`) |
 
@@ -30,7 +30,9 @@
 | [`docs/FILE_FORMATS.ko.md`](docs/FILE_FORMATS.ko.md) · [en](docs/FILE_FORMATS.en.md) | `.ims`, `.bnk`, `.rol`, `.iss`의 바이트 배치 |
 | [`docs/ENGINE_SPEC.ko.md`](docs/ENGINE_SPEC.ko.md) · [en](docs/ENGINE_SPEC.en.md) | 이벤트를 OPL2 레지스터 쓰기로 바꾸는 방법 |
 | [`docs/JOHAB_ENCODING.ko.md`](docs/JOHAB_ENCODING.ko.md) · [en](docs/JOHAB_ENCODING.en.md) | 2바이트 조합형 한글 인코딩 |
-| [`docs/OPL2_NOTES.en.md`](docs/OPL2_NOTES.en.md) | 이 저장소의 OPL2 에뮬레이터에서 무엇이 정확하고 무엇이 근사인지 |
+| [`docs/SOP_FORMAT.ko.md`](docs/SOP_FORMAT.ko.md) · [en](docs/SOP_FORMAT.en.md) | `.sop`의 바이트 배치. 이야기 것이 아닌 OPL3 트래커 포맷 |
+| [`docs/OPL2_NOTES.en.md`](docs/OPL2_NOTES.en.md) | 이 저장소의 OPL 에뮬레이터에서 무엇이 정확하고 무엇이 근사인지 |
+| [`docs/OPL3_NOTES.en.md`](docs/OPL3_NOTES.en.md) | 그중 OPL3가 더한 부분 — 둘째 뱅크, 4오퍼레이터, 스테레오, 파형 4–7 |
 
 명세는 공개된 포맷 설명에서 출발해, `.ims` 1128개 · `.bnk` 450개 · `.iss`
 680개 · `.rol` 2개로 이루어진 코퍼스를 직접 측정하여 고치고 보강한 것입니다.
@@ -53,7 +55,7 @@ npm install iyagimusic
 | `iyagimusic` | `IyagiMusic`과 자주 쓰는 것들 |
 | `iyagimusic/formats` | `.ims` · `.bnk` · `.rol` · `.iss` 판독기 |
 | `iyagimusic/johab` | 조합형 → 유니코드 |
-| `iyagimusic/opl` · `/opl/constants` · `/opl/tables` | OPL2 에뮬레이터 |
+| `iyagimusic/opl` · `/opl/constants` · `/opl/tables` | OPL2 · OPL3 에뮬레이터 |
 | `iyagimusic/driver` · `/sequencer` | 이벤트를 레지스터 쓰기로, 그리고 클럭 |
 | `iyagimusic/worklet` | 워크릿용 한 파일 번들(클래식 스크립트) |
 | `iyagimusic/worklet/url` | 그 번들의 URL과 `createIyagiNode` |
@@ -64,8 +66,8 @@ npm install iyagimusic
 import { IyagiMusic } from "iyagimusic";
 
 const music = new IyagiMusic({
-  song: imsBytes,          // .ims 또는 .rol
-  bank: bnkBytes,          // 곡 전용 음색 뱅크 (있으면)
+  song: imsBytes,          // .ims, .rol 또는 .sop
+  bank: bnkBytes,          // 곡 전용 음색 뱅크 (있으면; .sop은 필요 없음)
   fallbackBank: stdBytes,  // 없을 때 쓸 범용 뱅크
   lyrics: issBytes,        // 가사 (선택)
   sampleRate: 48000,
@@ -73,23 +75,36 @@ const music = new IyagiMusic({
 
 music.title;               // "검은 고양이 네로"
 music.missing;             // 뱅크에서 못 찾은 음색 이름들
+music.chipKind;            // "opl2" 또는 "opl3" -- 포맷이 정합니다
 music.render(float32Array); // 모노 샘플을 채웁니다
+music.renderStereo(l, r);   // OPL3면 진짜 스테레오, 아니면 같은 줄 두 벌
 ```
 
-재생 중인 칩 상태는 성부 단위로 읽을 수 있습니다. 스펙트럼은 없습니다 —
-OPL2가 내놓는 것은 모노 한 줄뿐이고, 대신 성부마다 무엇을 어떻게 울리고
-있는지가 있습니다. `IyagiMusic-web`의 막대 표시가 이것을 씁니다.
+곡 형식이 칩을 정합니다. `.ims`와 `.rol`은 YM3812, `.sop`은 YMF262입니다.
+`chip: "opl2"`를 넘기면 `.sop`도 아홉 성부로 줄여 재생할 수 있습니다
+(SOP_FORMAT §8). 음량은 `volume`으로 조절하십시오. 칩이 감당하는 폭을 1로 놓은
+비율이라, 성부가 스물인 곡과 아홉인 곡에 같은 값을 써도 됩니다.
+
+재생 중인 칩 상태는 성부 단위로 읽을 수 있습니다. 스펙트럼은 없습니다 — 칩이
+내놓는 것은 소리뿐이고, 대신 성부마다 무엇을 어떻게 울리고 있는지가 있습니다.
+`IyagiMusic-web`의 막대 표시가 이것을 씁니다.
 
 ```js
 const meter = IyagiMusic.meterBuffer();
 music.readMeters(meter);   // 성부마다 METER_STRIDE개: 피크, 변조기 감쇠(dB),
-                           // 음 높이(MIDI), 키온, 포락선 단계, 음량, 음색 비트
-music.voiceCount;          // 9, 리듬 모드면 11 (멜로디 6 + 드럼 5)
-music.chipFlags;           // 리듬 모드 · 트레몰로 · 비브라토 · 파형 선택
+                           // 음 높이(MIDI), 키온, 포락선 단계, 음량, 음색 비트,
+                           // 좌우 정위
+music.voiceCount;          // OPL2면 9 또는 11, OPL3면 18 또는 20
+music.chipFlags;           // 리듬 모드 · 트레몰로 · 비브라토 · 파형 선택 ·
+                           // OPL3 · 4오퍼레이터
 music.patchNames;          // 성부마다 지금 걸려 있는 뱅크 음색 이름
 ```
 
 읽을 때마다 피크 누산기가 비워지므로 한 화면에 한 번씩만 부르면 됩니다.
+
+성부 수는 칩과 모드가 정하지만 규칙은 하나입니다. **리듬 성부는 언제나 맨 뒤
+다섯 개**입니다 — 열하나 중 6–10이든 스물 중 15–19든 마찬가지라, 표시하는 쪽은
+어느 칩인지 몰라도 됩니다.
 
 ### 브라우저에서
 
@@ -117,6 +132,7 @@ node.port.postMessage({ type: "play" });
 
 ```
 npx iyagi-render song.ims bank.bnk out.wav 30   # WAV로 뽑기
+npx iyagi-render song.sop "" out.wav 30         # .sop은 뱅크 없이, 스테레오로
 ```
 
 ## 조합형 변환기
@@ -144,9 +160,11 @@ python3 test/test_johab.py
 ## 시험
 
 `test/`는 네 가지를 봅니다. 조합형 변환기는 CPython의 `johab` 코덱을 기준으로
-맞춰 보고, OPL2는 공식(주파수 · 감쇠 · 엔벨로프 배가 법칙)을 기준으로 재며,
-플레이어는 참조 코퍼스의 실제 파일을 읽고 소리를 내고, 워크릿 번들은 가짜
-`AudioWorkletGlobalScope` 안에서 실제로 돌려 봅니다. 코퍼스가 없으면 해당
+맞춰 보고, OPL은 공식(주파수 · 감쇠 · 엔벨로프 배가 법칙)과 칩이 문서로 밝힌
+규칙을 기준으로 재며, 플레이어는 참조 코퍼스의 실제 파일을 읽고 소리를 내고,
+워크릿 번들은 가짜 `AudioWorkletGlobalScope` 안에서 실제로 돌려 봅니다.
+OPL3가 0x105를 쓰기 전까지 OPL2와 샘플 단위로 같아야 한다는 것도 그중
+하나입니다 — 코어가 하나뿐이라, 서지 말아야 할 분기가 섰다면 거기서 드러납니다. 코퍼스가 없으면 해당
 시험은 건너뜁니다 — **건너뛴 시험은 통과한 시험과 똑같이 보이므로**, 초록불을
 믿기 전에 `# SKIP` 수를 확인하십시오.
 

@@ -20,8 +20,8 @@ rather than as a fact.
 | Text | 7-bit ASCII, or Korean 2-byte Johab; see `JOHAB_ENCODING.en.md` |
 
 It is not an Iyagi format and it is not an OPL2 format. It is documented here
-because it travels with the corpus, because the library reads it, and because
-§8 has to say out loud what is lost when an OPL2 plays one.
+because it travels with the corpus, because the library reads and plays it, and
+because §8 has to say which chip it gets and what an OPL2 costs it.
 
 This document was written from the ModdingWiki article *SOP Format* and then
 **checked against 336 `.sop` files**. A claim marked *(measured)* was verified
@@ -168,8 +168,8 @@ stores thirteen unpacked parameters per operator (`FILE_FORMATS.en.md` §2.3).
 > leaves byte 5 unqualified; see §7.
 
 Wave selects use the OPL3 range 0–7. An OPL2 has four waveforms, so values 4–7
-have no equivalent; `sopPatch` passes them through unchanged and the driver
-masks them (§8).
+have no equivalent there; `sopPatch` passes them through unchanged, and the
+driver masks them only when the chip under it is an OPL2 (§8).
 
 ### 3.3 Four-operator data (22 bytes)
 
@@ -312,33 +312,59 @@ the instrument sizes per type, the two- and four-operator byte orders, the
 event codes and their value sizes, the disjoint control-track code space, and
 the ±100 reading of pitch.
 
-## 8. Playing a SOP on an OPL2
+## 8. Playing a SOP
 
-This library's chip is an OPL2. SOP is an OPL3 format. `sopSequence` bridges
-them, and the bridge is lossy in four ways, all of them the chip's doing:
+A `.sop` is an OPL3 file and this library now has an OPL3 core, so
+`IyagiMusic` puts one under it by default — `chip: "auto"` reads the format and
+picks `opl3` for a SOP and `opl2` for an `.ims` or `.rol`. Nothing is guessed;
+the format says which chip it is for and the player honours it.
+
+**On an OPL3 the format fits, and fits exactly.** In rhythm mode a YMF262 has
+fifteen melodic voices and the five drums — precisely the twenty tracks §4.1
+says a SOP has. `sopSequence` maps rhythm tracks 6–10 onto the five rhythm
+voices (which sit at 15–19 on a YMF262, 6–10 on a YM3812), hands out the
+chip's six four-operator channels, and allocates the rest per note. With no
+four-operator tracks in the way, **nothing is cut at all**. Four-operator
+instruments get both operator pairs (§3.3), wave selects 4–7 are the chip's
+own, and §4.2's panning becomes the 0xC0 stereo switches — a SOP is the only
+thing this library plays that is not mono.
+
+**A track asks for four operators in either of two ways**, and the corpus uses
+both: the channel-mode table says 1 (§2), or the track selects a type-0
+instrument without saying so. 229 tracks ask the first way and 30 ask only the
+second, those 30 being spread over 4 files that never mark a channel mode 1 at
+all *(measured)*. Declared tracks are served first and implied ones after,
+each in track order, so which tracks lose out is a property of the file rather
+than of the order a player happens to walk it in. Only two files ask for more
+than the six a chip has, and nine tracks across them fall back to two
+operators *(measured)*.
+
+A reader writing their own player should note the constraint that forces that
+bookkeeping: joining a channel pair silences the upper channel of the pair
+(ENGINE_SPEC §10.1), so a four-operator instrument must never be loaded onto a
+pair the player has not set aside — it would take a voice another track is
+playing on with it.
+
+**On an OPL2 it does not fit, and `chip: "opl2"` asks for that on purpose.**
+That path is still there, and is what a SOP got before the OPL3 core existed:
 
 - **Voices.** SOP wants 20; an OPL2 has 9, or 6 plus the five rhythm voices.
   Only 38 of 336 files use nine or fewer melodic tracks, and 16 use six or
-  fewer; **114 use all twenty** *(measured)*. Rhythm tracks 6–10 keep their
-  voice one to one; melodic tracks share what is left, a voice allocated per
-  note, and when all are busy the note that ends soonest is cut short.
+  fewer; **114 use all twenty** *(measured)*. Melodic tracks share what is
+  left, a voice allocated per note, and when all are busy the note that ends
+  soonest is cut short — it is the note with least left to lose.
 - **Four-operator instruments.** Only the first operator pair is loaded (§3.3).
   61 files are affected *(measured)*.
-- **Wave selects 4–7.** The driver masks them to the OPL2's four (`driver.js`
-  `#sendWaveSelect`), so an OPL3 waveform becomes whichever of the first four
-  shares its low two bits.
-- **Panning.** Dropped. The chip is mono and this library has no stereo
-  anywhere.
+- **Wave selects 4–7.** The driver masks them to the OPL2's four, so an OPL3
+  waveform becomes whichever of the first four shares its low two bits.
+- **Panning.** Dropped; the chip is mono.
 
-One thing the reduction adds rather than drops: a track that plays notes
+Either way, one thing is added rather than dropped: a track that plays notes
 without ever sending an instrument-select gets the first instrument in the
 table that yields a patch. `ST-BGM.SOP` needs it — 4878 notes and not a single
 event 6 *(measured)*, so it is relying on whatever the editor happened to have
 loaded, and without a stand-in the whole file is silent.
 
-Pitch and volume need no bridging: SOP's ±100 about 100 is exactly the driver's
-14-bit bend at a pitch range of 1, and both volume scales are 0–127.
-
-What comes out is the song as an OPL2 could have played it, which is not the
-song. Anything wanting the real thing needs an OPL3 core, and this library does
-not have one.
+Pitch and volume need no bridging on either chip: SOP's ±100 about 100 is
+exactly the driver's 14-bit bend at a pitch range of 1, and both volume scales
+are 0–127.

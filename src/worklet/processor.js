@@ -14,7 +14,8 @@ class IyagiProcessor extends AudioWorkletProcessor {
     this.music = null;
     this.playing = false;
     this.lastReport = 0;
-    this.mono = new Float32Array(128);
+    this.left = new Float32Array(128);
+    this.right = new Float32Array(128);
     // One meter buffer for the life of the processor: postMessage copies it,
     // so it can be refilled every frame without allocating on the audio thread.
     this.meter = IyagiMusic.meterBuffer();
@@ -32,8 +33,12 @@ class IyagiProcessor extends AudioWorkletProcessor {
             fallbackBank: msg.fallbackBank,
             lyrics: msg.lyrics,
             sampleRate,
-            gain: msg.gain,
+            chip: msg.chip,
           });
+          // The page's slider is a fraction of the chip's headroom, not an
+          // absolute scale -- an OPL3 song has twenty voices to fit into the
+          // same output as an OPL2 song's nine.
+          if (msg.volume !== undefined) this.music.volume = msg.volume;
           this.music.loop = !!msg.loop;
           this.playing = false;
           this.patchEpoch = -1;
@@ -44,6 +49,7 @@ class IyagiProcessor extends AudioWorkletProcessor {
             missing: this.music.missing,
             lyrics: this.music.lyrics,
             tickBeat: this.music.song.tickBeat,
+            chip: this.music.chipKind,
           });
           // One frame of chip status right away, so a display can lay itself
           // out for the right number of voices before anything is played.
@@ -62,7 +68,7 @@ class IyagiProcessor extends AudioWorkletProcessor {
         this.#report(true);
         break;
       case "loop": if (this.music) this.music.loop = !!msg.value; break;
-      case "gain": if (this.music) this.music.gain = msg.value; break;
+      case "volume": if (this.music) this.music.volume = msg.value; break;
       default: break;
     }
   }
@@ -96,9 +102,16 @@ class IyagiProcessor extends AudioWorkletProcessor {
       for (const ch of out) ch.fill(0);
       return true;
     }
-    if (this.mono.length !== n) this.mono = new Float32Array(n);
-    const running = this.music.render(this.mono, 0, n);
-    for (const ch of out) ch.set(this.mono);
+    if (this.left.length !== n) {
+      this.left = new Float32Array(n);
+      this.right = new Float32Array(n);
+    }
+    // Always the stereo call: on a YM3812 it is the mono stream twice, and on
+    // a YMF262 it is the song's own panning, which is the only place in the
+    // library where the two chips differ audibly rather than in count.
+    const running = this.music.renderStereo(this.left, this.right, 0, n);
+    out[0].set(this.left);
+    for (let c = 1; c < out.length; c++) out[c].set(this.right);
     if (!running) { this.playing = false; this.#report(true); this.port.postMessage({ type: "ended" }); }
     else this.#report(false);
     return true;
