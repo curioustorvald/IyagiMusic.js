@@ -13,6 +13,15 @@ const BNK_PATCH_RECORD_SIZE = 30;
 const ISS_HEADER_SIZE = 154;
 const ISS_RECORD_SIZE = 5;
 const ISS_LINE_SIZE = 64;
+const SOP_HEADER_SIZE = 76;
+/** SOP §3.1: instType byte, then char[8] shortName and char[19] longName. */
+const SOP_INST_NAME_SIZE = 28;
+/** SOP §3.1: packed register bytes per instType. Anything else is a parse error. */
+const SOP_INST_DATA_SIZE = { 0: 22, 1: 11, 6: 11, 7: 11, 8: 11, 9: 11, 10: 11, 12: 0 };
+/** SOP §4.2: value bytes following the event code, in a sequenced track. */
+const SOP_TRACK_VALUE_SIZE = { 1: 1, 2: 3, 4: 1, 5: 1, 6: 1, 7: 1 };
+/** SOP §5: the control track has its own, disjoint, code space. */
+const SOP_CTRL_VALUE_SIZE = { 3: 1, 8: 1 };
 
 export class FormatError extends Error {}
 
@@ -129,6 +138,50 @@ export class FormatError extends Error {}
  */
 
 /** A resolved highlight, in character cells. @typedef {{line: number, from: number, to: number}} IssSpan */
+
+/**
+ * One entry of a SOP's instrument table. `data` is left packed -- these are
+ * OPL register bytes, where a BNK carries thirteen unpacked parameters per
+ * operator -- so `sopPatch` is what turns one into something the driver takes.
+ * SOP §3.1.
+ * @typedef {object} SopInstrument
+ * @property {number} type 0 four-op, 1 two-op melody, 6..10 rhythm, 12 comment
+ * @property {string} shortName bank instrument name; `char[8]`, often unterminated
+ * @property {string} longName display name -- or, for type 12, the comment line
+ * @property {Uint8Array} data 22, 11 or 0 packed register bytes
+ */
+
+/**
+ * One event, off a sequenced track or off the control track. SOP §4.2, §5.
+ * @typedef {object} SopEvent
+ * @property {number} tick absolute, in ticks
+ * @property {number} delta ticks since the previous event on the same track
+ * @property {number} code
+ * @property {number} value
+ * @property {number} [length] note-on only, in ticks
+ */
+
+/**
+ * One of a SOP's twenty tracks. SOP §4.1.
+ * @typedef {object} SopTrack
+ * @property {number} mode channel mode, masked to 0..2; SOP §2
+ * @property {number} modeRaw the byte as stored -- bit 7 is undocumented, SOP §2
+ * @property {SopEvent[]} events
+ */
+
+/**
+ * A SOP song -- the format the "Note" editor wrote, magic `sopepos`. SOP §1.
+ * @typedef {object} SopSong
+ * @property {number[]} version major and minor; only 0.1 exists
+ * @property {string} fileName what it was saved as, which is not always its own name
+ * @property {string} title already Johab-decoded
+ * @property {boolean} percussive
+ * @property {number} tickBeat @property {number} beatMeasure @property {number} basicTempo
+ * @property {SopInstrument[]} instruments
+ * @property {SopTrack[]} tracks always twenty; SOP §1
+ * @property {SopEvent[]} control tempo and global volume only; SOP §5
+ * @property {string[]} comments the type-12 instruments' text, in file order; SOP §6
+ */
 
 
 const asBytes = (d) =>
@@ -491,14 +544,183 @@ export function resolveIssSpans(iss) {
   return out;
 }
 
+/* ------------------------------------------------------------------ SOP */
+
+/**
+ * Parse a SOP song. SOP §1.
+ *
+ * Everything after the 76-byte header is positional -- channel modes, then
+ * instruments, then twenty tracks, then the control track, with no offsets
+ * anywhere -- so this has to be read strictly in order, the way a ROL does.
+ * The upside is that the file has to end exactly where the control track does,
+ * which is a strong check that nothing was misread: all 336 corpus files land
+ * on the last byte.
+ *
+ * @param {Bytes} data
+ * @param {DecodeOptions} [options] how to read the Johab title
+ * @returns {SopSong}
+ */
+export function parseSop(data, options) {
+  const b = asBytes(data);
+  if (b.length < SOP_HEADER_SIZE) throw new FormatError("SOP too short");
+  if (String.fromCharCode(...b.subarray(0, 7)) !== "sopepos") {
+    throw new FormatError("not a SOP file (bad signature)");
+  }
+  const dv = view(b);
+  const nTracks = b[73];
+  const song = {
+    version: [b[7], b[8]],
+    fileName: text(b, 10, 13, options),
+    title: text(b, 23, 31, options),
+    percussive: b[54] !== 0,
+    tickBeat: b[56],
+    beatMeasure: b[58],
+    basicTempo: b[59],
+    // Bytes 60..72 are a comment field the editor never wrote to; SOP §1 --
+    // 110 corpus files leave uninitialised stack in it, so it is not exposed.
+    instruments: [],
+    tracks: [],
+    control: [],
+    comments: [],
+  };
+
+  let o = SOP_HEADER_SIZE;
+  const modes = b.subarray(o, o + nTracks);
+  o += nTracks;
+  if (o > b.length) throw new FormatError("SOP channel-mode table truncated");
+
+  for (let i = 0; i < b[74]; i++) {
+    if (o + SOP_INST_NAME_SIZE > b.length) throw new FormatError("SOP instrument truncated");
+    const type = b[o];
+    const size = SOP_INST_DATA_SIZE[type];
+    if (size === undefined) {
+      throw new FormatError(`SOP instrument ${i}: unknown instType ${type}`);
+    }
+    const inst = {
+      type,
+      shortName: text(b, o + 1, 8, options),
+      longName: text(b, o + 9, 19, options),
+      data: b.subarray(o + SOP_INST_NAME_SIZE, o + SOP_INST_NAME_SIZE + size),
+    };
+    // §6: type 12 is not an instrument at all -- it is one 19-column line of
+    // the song's scrolling credits, parked in the instrument table so that the
+    // editor had somewhere to keep it.
+    if (type === 12) song.comments.push(inst.longName);
+    song.instruments.push(inst);
+    o += SOP_INST_NAME_SIZE + size;
+  }
+
+  /** §4.1 and §5 share a layout: u16 event count, u32 byte count, then events. */
+  const readTrack = (sizes, what) => {
+    if (o + 6 > b.length) throw new FormatError(`SOP ${what} header truncated`);
+    const count = dv.getUint16(o, true);
+    const size = dv.getUint32(o + 2, true);
+    o += 6;
+    const end = o + size;
+    if (end > b.length) throw new FormatError(`SOP ${what} runs past the end of the file`);
+    const events = [];
+    let tick = 0;
+    while (o < end) {
+      const delta = dv.getUint16(o, true);
+      const code = b[o + 2];
+      const valueSize = sizes[code];
+      if (valueSize === undefined) throw new FormatError(`SOP ${what}: unknown event ${code}`);
+      tick += delta;
+      const ev = { tick, delta, code, value: b[o + 3] };
+      // §4.2: only the note-on carries more than one value byte.
+      if (code === 2) ev.length = dv.getUint16(o + 4, true);
+      events.push(ev);
+      o += 3 + valueSize;
+    }
+    // Both counts are redundant with the walk, which is exactly why they are
+    // worth checking: either one disagreeing means the events were misread.
+    if (o !== end) throw new FormatError(`SOP ${what}: events overran dataSize`);
+    if (events.length !== count) {
+      throw new FormatError(`SOP ${what}: numEvents says ${count}, walked ${events.length}`);
+    }
+    return events;
+  };
+
+  for (let t = 0; t < nTracks; t++) {
+    song.tracks.push({
+      mode: modes[t] & 0x7f,      // §2: bit 7 is undocumented and carries no events
+      modeRaw: modes[t],
+      events: readTrack(SOP_TRACK_VALUE_SIZE, `track ${t}`),
+    });
+  }
+  song.control = readTrack(SOP_CTRL_VALUE_SIZE, "control track");
+  return song;
+}
+
+/** Unpack one operator's five register bytes into a bank operator. SOP §3.2. */
+function sopOperator(char, scale, attackDecay, sustainRelease, feedback) {
+  return {
+    ksl: (scale >> 6) & 3,
+    multiple: char & 0x0f,
+    feedback: (feedback >> 1) & 7,
+    attack: (attackDecay >> 4) & 0x0f,
+    sustain: (sustainRelease >> 4) & 0x0f,
+    eg: (char >> 5) & 1,
+    decay: attackDecay & 0x0f,
+    release: sustainRelease & 0x0f,
+    totalLevel: scale & 0x3f,
+    am: (char >> 7) & 1,
+    vib: (char >> 6) & 1,
+    ksr: (char >> 4) & 1,
+    // A bank's `connection` is the 0xC0 bit read the other way up: the driver
+    // writes `connection ? 0 : 1`, so an additive patch stores 0 here.
+    connection: feedback & 1 ? 0 : 1,
+  };
+}
+
+/**
+ * Turn a SOP instrument into the shape a BNK patch has, so that the driver can
+ * load it. Returns null for a comment (type 12) and for anything whose data
+ * the file cut short.
+ *
+ * Two degradations, both of them the OPL2's doing rather than the format's,
+ * and both spelled out in SOP §8:
+ *
+ * - A four-op instrument (type 0) is two of these back to back. This takes the
+ *   first pair, because an OPL2 voice has two operators and no fourth-operator
+ *   register to put the rest in.
+ * - Types 7..10 are single-operator rhythm voices, and in those the carrier
+ *   bytes and the feedback byte are uninitialised -- 81% of corpus hi-hats put
+ *   something out of range in the feedback byte. They are zeroed rather than
+ *   passed on; the driver never reads them back for a rhythm voice anyway.
+ *
+ * @param {SopInstrument} inst
+ * @returns {Patch|null}
+ */
+export function sopPatch(inst) {
+  const d = inst.data;
+  if (inst.type === 12 || d.length < 11) return null;
+  const singleOp = inst.type >= 7 && inst.type <= 10;
+  const feedback = singleOp ? 0 : d[5];
+  return {
+    name: inst.shortName,
+    modulator: sopOperator(d[0], d[1], d[2], d[3], feedback),
+    carrier: singleOp
+      ? sopOperator(0, 0, 0, 0, 0)
+      : sopOperator(d[6], d[7], d[8], d[9], feedback),
+    // Wave selects 4..7 are OPL3's; the driver masks them to the OPL2's four.
+    modWave: d[4],
+    carWave: singleOp ? 0 : d[10],
+  };
+}
+
 /**
  * Sniff a dropped file by content, since extensions are not always right.
  * @param {Bytes} data
- * @returns {"ims"|"rol"|"bnk"|"iss"|null}
+ * @returns {"ims"|"rol"|"bnk"|"iss"|"sop"|null}
  */
 export function identify(data) {
   const b = asBytes(data);
   if (b.length >= 8 && String.fromCharCode(...b.subarray(2, 8)) === "ADLIB-") return "bnk";
+  // SOP first: its magic is seven bytes of ASCII, so nothing else can collide.
+  if (b.length >= SOP_HEADER_SIZE && String.fromCharCode(...b.subarray(0, 7)) === "sopepos") {
+    return "sop";
+  }
   if (b.length >= 3 && b[0] === 0x49 && b[1] === 0x4d && b[2] === 0x50) return "iss";
   if (b.length >= IMS_HEADER_SIZE && b[0] === 1 && b[1] === 0) {
     const ds = view(b).getInt32(42, true);

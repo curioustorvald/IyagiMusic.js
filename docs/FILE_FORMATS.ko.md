@@ -12,6 +12,9 @@
 여러 바이트로 된 정수는 모두 **리틀 엔디언**이다. 문자열은 7비트 ASCII이거나
 한글 2바이트 조합형이며, 후자는 `JOHAB_ENCODING.ko.md`를 참고한다.
 
+같은 자료실에서 발견되는 다섯 번째 포맷 `.sop`는 프로그램도 칩도 다르며,
+`SOP_FORMAT.ko.md`에 따로 문서가 있다.
+
 이 문서는 공개된 포맷 설명(ModdingWiki의 *IMS Format*, *AdLib MIDI Format*,
 *ROL Format*, *AdLib Instrument Bank Format* 항목)을 바탕으로 쓰였고, 이후
 **`.ims` 1128개, `.bnk` 450개, `.iss` 680개, `.rol` 2개로 이루어진 코퍼스를

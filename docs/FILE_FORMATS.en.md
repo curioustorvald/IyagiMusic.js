@@ -13,6 +13,10 @@ Covers the four file types found alongside Korean AdLib music of the early
 All multi-byte integers are **little-endian**. All text is either 7-bit ASCII
 or Korean 2-byte Johab; see `JOHAB_ENCODING.en.md`.
 
+A fifth format, `.sop`, turns up in the same collections but belongs to a
+different program and a different chip; it has its own document,
+`SOP_FORMAT.en.md`.
+
 This document was written from the publicly available format descriptions
 (the ModdingWiki articles on *IMS Format*, *AdLib MIDI Format*, *ROL Format*,
 *AdLib Instrument Bank Format*) and then **corrected and extended by measuring

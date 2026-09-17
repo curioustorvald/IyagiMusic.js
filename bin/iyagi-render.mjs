@@ -1,14 +1,15 @@
 #!/usr/bin/env node
-// Render an .ims or .rol to a 16-bit WAV, for listening and for regression
+// Render an .ims, .rol or .sop to a 16-bit WAV, for listening and for regression
 // checks. The package's one executable; `npx iyagi-render` reaches it without
 // a checkout. Usage:  iyagi-render song.ims [bank.bnk] [out.wav] [seconds]
+// A .sop embeds its own instruments, so pass "" where the bank would go.
 import fs from "node:fs";
 import path from "node:path";
 import { IyagiMusic } from "../src/player.js";
 
 const [song, bank, out = "out.wav", seconds = "30"] = process.argv.slice(2);
 if (!song) {
-  console.error("usage: iyagi-render <song.ims|.rol> [bank.bnk] [out.wav] [seconds]");
+  console.error("usage: iyagi-render <song.ims|.rol|.sop> [bank.bnk] [out.wav] [seconds]");
   process.exit(1);
 }
 const read = (p) => (p && fs.existsSync(p) ? new Uint8Array(fs.readFileSync(p)) : undefined);

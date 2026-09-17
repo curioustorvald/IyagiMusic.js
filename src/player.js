@@ -6,12 +6,13 @@
 import { OPL2 } from "./opl/chip.js";
 import { NATIVE_RATE, METER_VOICES, METER_STRIDE, M_VOLUME } from "./opl/constants.js";
 import {
-  parseIms, parseRol, parseBnk, parseIss, resolvePatches, identify, deltaGcd,
-  resolveIssSpans,
+  parseIms, parseRol, parseBnk, parseIss, parseSop, resolvePatches,
+  identify, deltaGcd, resolveIssSpans,
 } from "./formats.js";
-import { Sequencer, imsSequence, rolSequence } from "./sequencer.js";
+import { Sequencer, imsSequence, rolSequence, sopSequence } from "./sequencer.js";
 
 export { OPL2, NATIVE_RATE, parseIms, parseRol, parseBnk, parseIss, identify, deltaGcd };
+export { parseSop, sopPatch } from "./formats.js";
 export {
   METER_VOICES, METER_STRIDE, METER_BD, METER_SD, METER_TOM, METER_TC, METER_HH,
   M_PEAK, M_MOD_DB, M_NOTE, M_KEY_ON, M_STATE, M_VOLUME, M_TIMBRE,
@@ -43,8 +44,8 @@ export { decodeJohab, decodeJohabField } from "./johab2unicode.js";
 export class IyagiMusic {
   /**
    * @param {object} opts
-   * @param {Uint8Array} opts.song           .ims or .rol bytes
-   * @param {Uint8Array} [opts.bank]         .bnk bytes, song-specific
+   * @param {Uint8Array} opts.song           .ims, .rol or .sop bytes
+   * @param {Uint8Array} [opts.bank]         .bnk bytes, song-specific; a .sop needs none
    * @param {Uint8Array} [opts.fallbackBank] .bnk bytes, the general bank
    * @param {Uint8Array} [opts.lyrics]       .iss bytes
    * @param {number} [opts.sampleRate]       output rate; default 48000
@@ -57,7 +58,7 @@ export class IyagiMusic {
    */
   constructor(opts) {
     const kind = identify(opts.song);
-    if (kind !== "ims" && kind !== "rol") {
+    if (kind !== "ims" && kind !== "rol" && kind !== "sop") {
       throw new Error("not a playable song file");
     }
     this.kind = kind;
@@ -80,6 +81,21 @@ export class IyagiMusic {
         percussive: this.song.percussive,
         pitchRange: this.song.pitchRange,
         patches: this.patches,
+      });
+    } else if (kind === "sop") {
+      // A SOP carries its own instruments, so there is no bank to resolve and
+      // nothing that can go missing. What it does not fit in is the chip:
+      // `sopSequence` explains the reduction, and SOP §8 spells it out.
+      this.song = parseSop(opts.song, this.textOptions);
+      this.missing = [];
+      this.sequencer = new Sequencer({
+        chip: this.chip,
+        events: sopSequence(this.song),
+        tickBeat: this.song.tickBeat,
+        tempo: this.song.basicTempo || 120,   // SOP §1: one corpus file says 0
+        percussive: this.song.percussive,
+        pitchRange: 1,                        // SOP §4.2: pitch 0..200 is ±1 semitone
+        patches: [],
       });
     } else {
       this.song = parseRol(opts.song, this.textOptions);

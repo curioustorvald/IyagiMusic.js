@@ -10,7 +10,11 @@ import {
 } from "../src/player.js";
 
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
-const have = fs.existsSync(CORPUS);
+// The bulk of the corpus lives in one subdirectory. Its name has changed once
+// already, so `have` checks for it rather than for CORPUS: the parent surviving
+// a rename underneath it turns every corpus test from a skip into a failure.
+const MEGA = path.join(CORPUS, "IMS_FILE_MEGA_CORPUS");
+const have = fs.existsSync(MEGA);
 const read = (p) => new Uint8Array(fs.readFileSync(path.join(CORPUS, p)));
 const rms = (a) => Math.sqrt(a.reduce((s, v) => s + v * v, 0) / a.length);
 
@@ -18,7 +22,7 @@ test("identifies each file type by content", { skip: !have }, () => {
   assert.equal(identify(read("ZZ-BLCAT.IMS")), "ims");
   assert.equal(identify(read("STANDARD.BNK")), "bnk");
   assert.equal(identify(read("SV-10TH.ROL")), "rol");
-  assert.equal(identify(read("IMS_FILE_MEGA_COLLECTION/000-TEMA.ISS")), "iss");
+  assert.equal(identify(read("IMS_FILE_MEGA_CORPUS/000-TEMA.ISS")), "iss");
 });
 
 test("decodes a Johab title and resolves every patch", { skip: !have }, () => {
@@ -28,7 +32,7 @@ test("decodes a Johab title and resolves every patch", { skip: !have }, () => {
 });
 
 test("the delta-time GCD agrees with the header's srcTickBeat", { skip: !have }, () => {
-  const root = path.join(CORPUS, "IMS_FILE_MEGA_COLLECTION");
+  const root = MEGA;
   let checked = 0;
   for (const fn of fs.readdirSync(root)) {
     if (!fn.toUpperCase().endsWith(".IMS")) continue;
@@ -61,7 +65,7 @@ test("renders IMS and ROL songs without clipping or silence", { skip: !have }, (
 
 test("every corpus bank parses and every patch name resolves", { skip: !have }, () => {
   const std = parseBnk(read("STANDARD.BNK"));
-  const root = path.join(CORPUS, "IMS_FILE_MEGA_COLLECTION");
+  const root = MEGA;
   let songs = 0, refs = 0, missing = 0;
   for (const fn of fs.readdirSync(root)) {
     if (!fn.toUpperCase().endsWith(".IMS")) continue;
@@ -76,14 +80,14 @@ test("every corpus bank parses and every patch name resolves", { skip: !have }, 
     }
     songs++;
   }
-  assert.equal(songs, 1128);
+  assert.equal(songs, 1366);
   assert.ok(missing / refs < 0.001, `${missing} of ${refs} patch names unresolved`);
 });
 
 test("ISS credit fields are tool defaults, not credits", { skip: !have }, () => {
   // Pinned because the page suppresses exactly this set: if a corpus turns up
   // that carries real credits, this fails and the suppression list is wrong.
-  const root = path.join(CORPUS, "IMS_FILE_MEGA_COLLECTION");
+  const root = MEGA;
   const seen = { writer: new Set(), composer: new Set(), singer: new Set(), editor: new Set() };
   let files = 0;
   for (const fn of fs.readdirSync(root)) {
@@ -93,7 +97,7 @@ test("ISS credit fields are tool defaults, not credits", { skip: !have }, () => 
     files++;
     for (const k of Object.keys(seen)) if (iss[k].trim()) seen[k].add(iss[k].trim());
   }
-  assert.equal(files, 680);
+  assert.equal(files, 684);
   assert.deepEqual([...seen.composer].sort(), ["COMPOSER", "Solgher"]);
   assert.deepEqual([...seen.singer].sort(), ["Damul", "SINGER"]);
   assert.deepEqual([...seen.editor].sort(), ["EDITOR", "Salmosa"]);
@@ -101,7 +105,7 @@ test("ISS credit fields are tool defaults, not credits", { skip: !have }, () => 
 });
 
 test("an ISS cue is the right edge of the highlight, not an isolated run", { skip: !have }, () => {
-  const root = path.join(CORPUS, "IMS_FILE_MEGA_COLLECTION");
+  const root = MEGA;
   const iss = parseIss(new Uint8Array(fs.readFileSync(path.join(root, "AGP-DEUX.ISS"))));
   const spans = resolveIssSpans(iss);
 
@@ -126,7 +130,7 @@ test("an ISS cue is the right edge of the highlight, not an isolated run", { ski
 test("ISS cues tile a lyric line contiguously", { skip: !have }, () => {
   // The evidence for the accumulating reading: cue runs abut each other rather
   // than scattering, so they describe one growing region.
-  const root = path.join(CORPUS, "IMS_FILE_MEGA_COLLECTION");
+  const root = MEGA;
   let abutting = 0, total = 0;
   for (const fn of fs.readdirSync(root)) {
     if (!fn.toUpperCase().endsWith(".ISS")) continue;
