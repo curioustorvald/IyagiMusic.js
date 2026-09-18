@@ -376,3 +376,106 @@ test("each rhythm instrument meters on its own row", () => {
     assert.equal(row(m, rows[name], M_NOTE) >= 0, tonal, `${name} pitch`);
   }
 });
+
+// ── Mix scale: the two figures that decide whether the chip sounds like one ──
+//
+// Both of these were wrong at once, and neither was catchable by any test that
+// asserted a ratio: one halved every FM patch's brightness, the other left the
+// drums 6 dB down, and together they made every song mild in a way no single
+// patch could be blamed for. OPL2_NOTES.md §"Fixed after measuring" has the
+// story; these are the anchors.
+
+test("the modulator's output reaches the carrier's phase WHOLE", () => {
+  // A full-scale operator is ±OPL_FULL_SCALE and a cycle of phase is 1024
+  // units, so a full-scale modulator sweeps the carrier ±4 cycles. Measured by
+  // driving a carrier that is SILENT of itself (total level 63) and reading the
+  // modulator's own output back off the meter, then checking the carrier's
+  // spectrum spans the harmonics that much deviation implies.
+  //
+  // The direct read: with the modulator at full level and the carrier tuned to
+  // the same frequency, the number of harmonics above 1% of the peak is a
+  // monotone function of the modulation index, and halving the index halves it.
+  const spectrumSpan = () => {
+    const chip = new OPL2();
+    for (const [off, tl] of [[0, 0x00], [3, 0x00]]) {
+      chip.write(0x20 + off, 0x21);            // sustaining, multiple 1
+      chip.write(0x40 + off, tl);
+      chip.write(0x60 + off, 0xf0);            // instant attack, no decay
+      chip.write(0x80 + off, 0x00);
+      chip.write(0xe0 + off, 0x00);
+    }
+    chip.write(0xc0, 0x00);                    // FM, no feedback
+    chip.write(0xa0, 0x40); chip.write(0xb0, 0x20 | (4 << 2));
+    const N = 1 << 14, buf = new Float32Array(N);
+    chip.generate(buf, 0, N);                  // settle
+    chip.generate(buf, 0, N);
+    const f0 = (0x40 * NATIVE_RATE) / (1 << (20 - 4));
+    const mag = [];
+    for (let h = 1; h * f0 < NATIVE_RATE / 2 && h <= 48; h++) {
+      const w = (2 * Math.PI * h * f0) / NATIVE_RATE;
+      let re = 0, im = 0;
+      for (let i = 0; i < N; i++) {
+        const s = buf[i] * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / N));
+        re += s * Math.cos(w * i); im += s * Math.sin(w * i);
+      }
+      mag.push(Math.hypot(re, im));
+    }
+    const peak = Math.max(...mag);
+    let last = 0;
+    mag.forEach((m, i) => { if (m > peak * 0.01) last = i + 1; });
+    return last;
+  };
+  // Halved it was the 18th; whole it is the 32nd. Anything near 18 means the
+  // halving is back -- the number itself is coarse, the factor of two is not.
+  const span = spectrumSpan();
+  assert.ok(span > 24, `only ${span} harmonics above 1%: the modulator is being scaled down`);
+});
+
+test("feedback 7 is half the direct modulation path", () => {
+  // The application manual states feedback 7 as 4π of phase deviation, and
+  // that is the ONLY modulation figure it gives. The direct path is ±4 cycles
+  // = 8π, so the two differ by two. They were EQUAL once, because the direct
+  // path had been scaled down to match the one documented number; that
+  // equality is the bug, and this is its shape in arithmetic rather than sound.
+  const FULL = expand(0);
+  const feedbackAt7 = (FULL + FULL) / 2 / (1 << (8 - 7));   // #feedbackOf, steady
+  const direct = FULL;                                      // #twoOp, whole
+  assert.equal(Math.round(direct / feedbackAt7), 2);
+  // …and 4π really is two cycles of a 1024-step phase.
+  assert.ok(Math.abs(feedbackAt7 / 1024 - 2) < 0.01,
+            `feedback 7 should be 2 cycles, got ${feedbackAt7 / 1024}`);
+});
+
+test("a rhythm voice is summed into the bus twice", () => {
+  // Rhythm mode reaches the accumulator twice for channels 6, 7 and 8, so the
+  // same operator at the same level is 6 dB louder as a drum than as a melodic
+  // voice. Checked on the TOM, which is the one rhythm voice that is a plain
+  // sine -- so the two paths differ in nothing but the doubling.
+  const sine = (rhythm) => {
+    const chip = new OPL2();
+    if (rhythm) chip.write(0x01, 0x20);
+    // The tom is channel 8's MODULATOR (RHYTHM_TOM_OP), so silence the carrier
+    // and make the channel additive: then the modulator alone reaches the bus
+    // on both paths, and the only thing that differs is the doubling.
+    for (const [off, tl] of [[18, 0x00], [21, 0x3f]]) {
+      chip.write(0x20 + off, 0x21);
+      chip.write(0x40 + off, tl);
+      chip.write(0x60 + off, 0xf0);
+      chip.write(0x80 + off, 0x00);
+      chip.write(0xe0 + off, 0x00);
+    }
+    chip.write(0xc0 + 8, 0x01);                       // additive: carrier alone
+    chip.write(0xa8, 0x40); chip.write(0xb8, (4 << 2) | (rhythm ? 0 : 0x20));
+    if (rhythm) chip.write(0xbd, 0x20 | 0x04);        // strike the tom
+    const buf = new Float32Array(2048);
+    chip.generate(buf, 0, buf.length);
+    let peak = 0;
+    for (const v of buf) peak = Math.max(peak, Math.abs(v));
+    return peak;
+  };
+  const melodic = sine(false), drum = sine(true);
+  assert.ok(melodic > 0.05 && drum > 0.05, `both paths must sound (${melodic}, ${drum})`);
+  const ratio = drum / melodic;
+  assert.ok(Math.abs(ratio - 2) < 0.1,
+            `a rhythm voice should be twice a melodic one, got ${ratio.toFixed(3)}×`);
+});

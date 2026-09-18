@@ -30,7 +30,7 @@ export { decodeJohab, decodeJohabField } from "./johab2unicode.js";
 /** @typedef {import("./formats.js").Patch} Patch */
 
 /** Output scale by chip, before the caller overrides it. See `headroom` below. */
-const DEFAULT_GAIN = { opl2: 0.7, opl3: 0.42 };
+const DEFAULT_GAIN = { opl2: 0.55, opl3: 0.32 };
 
 /**
  * The lyric text that should be lit at a given tick, and how much of it.
@@ -147,16 +147,25 @@ export class IyagiMusic {
      * An OPL3 song reaches further, because it has more than twice the voices
      * and each one is exactly as loud (see MIX_SCALE in `opl/chip.js`). Voices
      * not playing the same note sum in power rather than in amplitude, so the
-     * derivation says 0.7 × √(9/20) = 0.47 -- and **the corpus says 0.42**.
+     * derivation says √(9/20) = 0.67 of the OPL2's figure -- and the corpus
+     * says 0.58. The derivation is a good first guess about uncorrelated
+     * voices; real songs put their loudest voices on the same beat.
      *
-     * Measured over all 336 `.sop` files, two seconds each, counting samples
-     * the clamp had to catch: at 0.47 two files clip past 0.1% of their
-     * samples and the worst reaches 1.07%, where the nine-voice path those
-     * same songs used to take clips 0.22% at its worst. At 0.42 nothing
-     * reaches 0.1% and the worst file is 0.074%, which is better than the
-     * OPL2's own standard rather than merely close to it. The derivation is a
-     * good first guess about uncorrelated voices; real songs put their loudest
-     * voices on the same beat.
+     * **Both numbers are measured, and both were re-measured when the bus got
+     * louder.** Summing the rhythm channels twice, as the chip does, put 6 dB
+     * more into every rhythm-mode song, which is most of them; the figures
+     * before that were 0.7 and 0.42. The protocol is the same either way: two
+     * seconds of every corpus song, counting the samples the clamp has to
+     * catch, and the standard is that no file loses more than 0.1% of them.
+     *
+     * | gain | over 0.1% | worst file |
+     * |---|---|---|
+     * | 1366 `.ims` at 0.70 | 7 files | `HOOT!!!.IMS`, 0.840% |
+     * | …at 0.60 | 1 file | 0.237% |
+     * | **…at 0.55** | **none** | **0.098%** |
+     * | 336 `.sop` at 0.42 | 1 file | `MEGATON2.SOP`, 1.938% |
+     * | …at 0.36 | 1 file | 0.187% |
+     * | **…at 0.32** | **none** | **0.022%** |
      *
      * @type {number}
      */

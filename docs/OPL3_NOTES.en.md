@@ -82,21 +82,25 @@ the five rhythm voices — carries over unchanged rather than being re-argued.
 ## Knowingly approximate
 
 - **Everything `OPL2_NOTES.en.md` lists as approximate still is** — the
-  tremolo and vibrato waveforms, the rhythm phase equations, the rhythm output
-  level. They are the same code.
+  tremolo and vibrato waveforms, and the rhythm phase equations. They are the
+  same code. The rhythm output level is no longer on that list: the channels
+  are summed twice now, which is what the chip is reported to do, though that
+  report is second-hand and `OPL2_NOTES.en.md` keeps it labelled as such.
 - **Four-channel output is not implemented.** Bits 6 and 7 of 0xC0 are the
   YMF262's other two outputs (CHC and CHD). `.sop` has three panning values
   and no use for them, so they are stored and ignored.
 - **The output level of eighteen channels.** One OPL3 voice is exactly as loud
   as one OPL2 voice — the same per-channel DAC level, the same `MIX_SCALE` —
   so twenty voices reach further than nine, and a real YMF262 clips there too.
-  The player backs off instead: a default gain of 0.42 against the OPL2's 0.7,
-  which is **measured, not derived**. The derivation from uncorrelated voices
-  says 0.7 × √(9/20) = 0.47; at 0.47 two corpus files clip past 0.1% of their
-  samples and the worst reaches 1.07%, where the nine-voice path those same
-  songs used to take clips 0.22% at its worst. At 0.42 nothing reaches 0.1%
-  and the worst file is 0.074%. Real songs put their loudest voices on the
-  same beat, and the corpus knows that better than the arithmetic does.
+  The player backs off instead: a default gain of **0.32** against the OPL2's
+  0.55, which is **measured, not derived**. The derivation from uncorrelated
+  voices says √(9/20) = 0.67 of the OPL2 figure; the corpus says 0.58. Over all
+  336 `.sop` files, two seconds each, with no file allowed to lose more than
+  0.1% of its samples to the clamp: 0.42 leaves one file at 1.938%, 0.36 leaves
+  one at 0.187%, and 0.32 leaves none above 0.022%. Real songs put their
+  loudest voices on the same beat, and the corpus knows that better than the
+  arithmetic does. Both figures were 0.42 and 0.7 before the rhythm channels
+  were summed twice, which is 6 dB more bus in most songs.
 
 ## Deliberately absent
 

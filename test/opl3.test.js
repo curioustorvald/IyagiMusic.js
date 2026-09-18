@@ -610,9 +610,19 @@ test("every corpus SOP plays on the OPL3", { skip: !have }, () => {
   // are what a two-second window finds, not what the whole corpus contains:
   // plenty of these songs open quietly, so `silent` counts slow starts as much
   // as silence, and is here because a broken OPL3 path would send it to 336.
+  //
+  // `wide` is a property of the PLAN and so of the file. The other two are
+  // THRESHOLD counts over rendered audio, so any change to the chip's output
+  // level moves them by a file or two without anything being wrong: ten files
+  // sit within a factor of four of the panning threshold. They were 177 and 71
+  // until the rhythm channels began summing twice (which pushed one quiet
+  // opening above the silence floor) and the default gain came down from 0.42
+  // to 0.32 to make room for it (which pulled one file back under the panning
+  // one). Re-pin them when the level changes; do not widen the tolerance,
+  // because a broken path does not move these by one.
   assert.equal(wide, 61, "files whose four-operator instrument reaches four operators");
-  assert.equal(panned, 177, "files whose stereo switches have parted by two seconds");
-  assert.equal(silent, 71, "files with nothing audible in their first two seconds");
+  assert.equal(panned, 176, "files whose stereo switches have parted by two seconds");
+  assert.equal(silent, 70, "files with nothing audible in their first two seconds");
 });
 
 test("a four-operator corpus SOP uses four operators", { skip: !have }, () => {

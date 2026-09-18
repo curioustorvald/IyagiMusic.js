@@ -78,6 +78,8 @@ const sign = [0];
  * `IyagiMusic` picks its default gain by how many voices the song can reach.
  */
 const MIX_SCALE = 16384;
+/** How many times a rhythm voice reaches the accumulator; see `#generateRhythm`. */
+const RHYTHM_MIX = 2;
 
 /** `Channel.pairRole`: not in a four-operator pair, the pair's head, its slave. */
 const PAIR_NONE = 0, PAIR_HEAD = 1, PAIR_SLAVE = 2;
@@ -551,22 +553,39 @@ class OplChip {
     return v;
   }
 
-  /** The phase modulation a channel's modulator feeds back into itself. */
+  /**
+   * The phase modulation a channel's modulator feeds back into itself.
+   *
+   * The average of the last two outputs, scaled so that feedback 7 is the
+   * documented 4π of phase modulation at full amplitude. Note that this is a
+   * QUARTER of what the direct modulation path carries -- an operator reading
+   * another one gets its output whole (see `#twoOp`) -- which is the ordinary
+   * relationship on an FM chip: feedback is a fraction of full modulation.
+   * The two were equal here once, and that was the bug; see OPL2_NOTES.
+   */
   #feedbackOf(ch) {
     if (!ch.feedback) return 0;
-    // The average of the last two outputs, scaled so that feedback 7 is
-    // the documented 4π of phase modulation at full amplitude.
     return ((ch.mod.out + ch.mod.prev) / 2 / (1 << (8 - ch.feedback))) | 0;
   }
 
-  /** One ordinary two-operator channel. */
+  /**
+   * One ordinary two-operator channel.
+   *
+   * The modulator's output goes into the carrier's phase WHOLE. A full-scale
+   * operator is ±4084 and a cycle of phase is 1024 units, so that is ±4 cycles
+   * of deviation -- twice what feedback 7 gives, which is the only figure the
+   * application manual states. Halving it here to match that figure is what
+   * made every FM patch dull, and it survived the ±2042 → ±4084 output-scale
+   * fix because the feedback anchor validates the other path; OPL2_NOTES has
+   * the measurement.
+   */
   #twoOp(ch, tremolo, vibrato) {
     this.#advanceEnvelope(ch.mod);
     this.#advanceEnvelope(ch.car);
     const m = this.#operate(ch.mod, this.#feedbackOf(ch), tremolo, vibrato);
     return ch.additive
       ? m + this.#operate(ch.car, 0, tremolo, vibrato)
-      : this.#operate(ch.car, (m / 2) | 0, tremolo, vibrato);
+      : this.#operate(ch.car, m, tremolo, vibrato);
   }
 
   /**
@@ -592,17 +611,17 @@ class OplChip {
 
     const o1 = this.#operate(op1, this.#feedbackOf(head), tremolo, vibrato);
     if (!head.additive) {
-      const o2 = this.#operate(op2, (o1 / 2) | 0, tremolo, vibrato);
-      const o3 = this.#operate(op3, (o2 / 2) | 0, tremolo, vibrato);
+      const o2 = this.#operate(op2, o1, tremolo, vibrato);
+      const o3 = this.#operate(op3, o2, tremolo, vibrato);
       return slave.additive
         ? o3 + this.#operate(op4, 0, tremolo, vibrato)
-        : this.#operate(op4, (o3 / 2) | 0, tremolo, vibrato);
+        : this.#operate(op4, o3, tremolo, vibrato);
     }
     const o2 = this.#operate(op2, 0, tremolo, vibrato);
-    const o3 = this.#operate(op3, (o2 / 2) | 0, tremolo, vibrato);
+    const o3 = this.#operate(op3, o2, tremolo, vibrato);
     return slave.additive
       ? o1 + o3 + this.#operate(op4, 0, tremolo, vibrato)
-      : o1 + this.#operate(op4, (o3 / 2) | 0, tremolo, vibrato);
+      : o1 + this.#operate(op4, o3, tremolo, vibrato);
   }
 
   /**
@@ -719,6 +738,22 @@ class OplChip {
    * An OPL3 puts them on the same three channels of the first bank, and its
    * second bank has no rhythm mode of its own.
    */
+  /**
+   * The five rhythm voices, each summed into the bus TWICE.
+   *
+   * That doubling is a property of the chip rather than of any voice: in
+   * rhythm mode channels 6, 7 and 8 reach the accumulator twice over, so the
+   * drums sit 6 dB above where the same operators would sit on a melodic
+   * channel. It is reported, and reported as verified against a real YM3812,
+   * by every emulator that implements it -- but Yamaha's own manual documents
+   * the drums only as tonal advice (§5-4) and says nothing about the mix, so
+   * unlike the envelope clock there is no first-party table behind it. What
+   * decided it was listening: without it a rhythm-mode song is audibly mild,
+   * and every other candidate for that was measured and ruled out first.
+   *
+   * `value * 2` rather than two calls to `#emit` so that the per-voice meter
+   * reports the contribution the voice actually makes to the mix.
+   */
   #generateRhythm(tremolo, vibrato, stereo) {
     const ops = this.operators;
     const ch6 = this.channels[6];
@@ -732,12 +767,13 @@ class OplChip {
     for (const op of [ch6.mod, ch6.car, hh, sd, tom, tc]) this.#advanceEnvelope(op);
 
     const m = this.#operate(ch6.mod, this.#feedbackOf(ch6), tremolo, vibrato);
-    this.#emit(base + R_BD, ch6, ch6.additive
+    this.#emit(base + R_BD, ch6, RHYTHM_MIX * (ch6.additive
       ? m + this.#operate(ch6.car, 0, tremolo, vibrato)
-      : this.#operate(ch6.car, (m / 2) | 0, tremolo, vibrato), stereo);
+      : this.#operate(ch6.car, m, tremolo, vibrato)), stereo);
 
     // Tom-tom is a plain sine on channel 9's frequency.
-    this.#emit(base + R_TOM, ch8, this.#operate(tom, 0, tremolo, vibrato), stereo);
+    this.#emit(base + R_TOM, ch8,
+      RHYTHM_MIX * this.#operate(tom, 0, tremolo, vibrato), stereo);
 
     // The remaining three read each other's accumulators, so every phase has
     // to be advanced before any of them is sampled.
@@ -749,11 +785,11 @@ class OplChip {
     const noise = this.noise & 1;
     const xor = (((hp >> 2) ^ (hp >> 7)) | (hp >> 3) | ((tp >> 5) ^ (tp >> 3))) & 1;
 
-    this.#emit(base + R_HH, ch7,
+    this.#emit(base + R_HH, ch7, RHYTHM_MIX *
       this.#rhythmOperator(hh, (xor << 9) | (xor ^ noise ? 0x0d0 : 0x034), tremolo), stereo);
-    this.#emit(base + R_SD, ch7,
+    this.#emit(base + R_SD, ch7, RHYTHM_MIX *
       this.#rhythmOperator(sd, (((hp >> 8) & 1) ? 0x200 : 0x100) ^ (noise << 8), tremolo), stereo);
-    this.#emit(base + R_TC, ch8,
+    this.#emit(base + R_TC, ch8, RHYTHM_MIX *
       this.#rhythmOperator(tc, (xor << 9) | 0x100, tremolo), stereo);
   }
 
