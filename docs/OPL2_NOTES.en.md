@@ -195,7 +195,46 @@ is the curve or the manual's own rounding; and the stepping of the tremolo and
 vibrato tables. A fourth, if the drums still do not sit right: the top cymbal is
 the only rhythm voice whose phase lands on the sine's peak at both of its two
 values, so it is a ±full-scale square where the others are partial — and the
-phase equations are the part with no first-party check. The structure here is arranged for it — every
+phase equations are the part with no first-party check.
+
+### The rhythm voices sound harsh, and here is what that is *not*
+
+Reported after the doubling above made the drums 6 dB louder: the noise-based
+voices sound dirty. Shelved for want of a hardware reference, but these were
+measured and ruled out, so nobody need repeat them:
+
+- **Not the doubling.** Struck alone and compared at matched level, the snare,
+  tom, cymbal and hi-hat are bit-identical before and after it, at exactly
+  2.000×. Only the bass drum's waveform changed, and that is the modulation
+  fix, since it is the one drum that is an ordinary two-operator voice.
+- **Not the noise generator.** The LFSR's period is 8388607 = 2²³ − 1, so
+  `x²³ + x¹⁴ + 1` is primitive and the register is maximal-length. A maximal
+  LFSR has a flat spectrum by construction.
+- **Not clipping.** Over a whole 75-second song at the default gain: 0.000% of
+  samples, first one 66 seconds in.
+- **Not the resampler.** Linear interpolation was the obvious suspect and it is
+  innocent: against a windowed-sinc reference in the 12 kHz-to-Nyquist band it
+  has *less* energy, not more — −1.6 dB (hi-hat), −0.8 dB (cymbal), −3.8 dB
+  (snare) at 48 kHz. It dulls rather than folds.
+- **Probably not the `xor` asymmetry, though it is worth a second look.** Two
+  of that expression's three terms pair a hi-hat bit with a cymbal bit and the
+  middle one (`hh3`) stands alone, which is an odd shape. Pairing it against
+  the cymbal's bit 5 does help, but only marginally over five tunings — hi-hat
+  flatness 0.285 → 0.293, cymbal 0.087 → 0.103, strongest line down about
+  1 dB — so it does not explain what was heard. Whether our transcription
+  matches the die description this file cites is still worth checking.
+
+What is left is that **the card's output stage is not modelled anywhere**, in
+the core or the player. These three voices are the only sources with real
+energy near Nyquist — the hi-hat puts 23.6% of its energy above 22 kHz and the
+cymbal 20.1%, against 0.0% for the bass drum and tom — and they are not
+really noise either: the phase is switched between a handful of discrete
+values, so the strongest single line stands 16 to 23 dB above the mean. A
+YM3812 feeds a Y3014B DAC and then an op-amp filter, and none of that is here.
+A two-pole low-pass at 8 to 12 kHz is audibly in the right direction. It is not
+implemented because the corner frequency is a hardware fact with no source to
+hand, and a number picked by ear would be the first one in this core without a
+derivation behind it. The structure here is arranged for it — every
 constant is named and exported, the envelope's rate handling is one function
 and its step another, and the drums are one more. None of it is spread across a
 per-sample loop that would have to be rewritten.
