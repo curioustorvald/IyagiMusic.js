@@ -141,6 +141,15 @@ written against.
 This write must be repeated whenever the channel volume changes, for every
 operator of the voice.
 
+**IMPLAY does not do this for additive modulators** *(IMPLAY.EXE)*. Its driver
+scales a carrier, or a single-operator rhythm voice, by the channel volume. It
+leaves an FM modulator alone, as above. But it scales an additive modulator by
+the user's mixer level for that channel, which is 127 unless someone moved
+the slider, and never by the song's volume. So in IMPLAY, `An` fades and
+note-on volumes do not reach the modulator of an additive patch. That is the
+early-driver behaviour this section describes as a bug, and it is what these
+files were heard with. This library follows the corrected form above.
+
 ## 5. Pitch
 
 ### 5.1 The frequency table
@@ -279,6 +288,14 @@ retriggers the envelope rather than gliding.
 Events addressed to a voice the current mode does not have (channels 9 and 10
 in melodic mode) are discarded before any of this.
 
+IMPLAY's interpreter differs from this table in three places, none of them
+audible on the corpus *(IMPLAY.EXE)*. A `9n` note-on does not key the voice
+off first; FILE_FORMATS §1.4 counts where that could matter. Channels 9 and
+10 in melodic mode are not filtered. The driver ignores them for patches and
+volume, and their note-ons land on registers `0xA9`–`0xAA` and `0xB9`–`0xBA`, which the
+chip does not have. And a song ends at `totalTick` as well as at `FC`
+(FILE_FORMATS §1.5).
+
 ## 9. Clock
 
 ```
@@ -381,6 +398,47 @@ did on a YM3812.
 
 A joined pair (§10) is two channels, and the simplest thing that is always
 right is to write the same two bits to both halves.
+
+### 11.1 IMPLAY's stereo
+
+IMPLAY makes stereo out of an OPL3 without using a single four-operator
+voice or pan bit per note *(IMPLAY.EXE)*. It plays **every melodic voice
+twice**: once on each register bank, with identical patches and identical
+frequency writes, keyed together. Bank 0's channel is routed to outputs B+D
+(`0xC0` bits `0xA0`) and bank 1's to A+C (`0x50`). On a YMF262 as wired on a
+Sound Blaster, A is left, so bank 0 is the right side and bank 1 the left.
+The only difference between the two copies is their output level:
+
+```
+pan   = PAN[channel]                       // fixed, below; 0x40 is centre
+right = left = volume                      // the 0..127 channel volume
+if pan < 0x40:  right -= (0x40 - pan) * volume >> 6
+if pan > 0x40:  left  -= (pan - 0x40) * volume >> 6
+```
+
+`right` and `left` then go through §4 in place of `volume`, for bank 0 and
+bank 1 respectively. A modulator's level is the same on both banks.
+
+The pans are constants, set when a song loads and reapplied on every `Cn`.
+The song has no say in them:
+
+| channel | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `PAN` | `45` | `38` | `1F` | `12` | `53` | `6A` | `5C` | `3D` | `51` | `17` | `72` |
+
+So channel 3 sits well to the left (right side at 18/64 of full), channel 5
+well to the right, and channel 0 almost in the middle. In percussive mode
+channels 6–10 are rhythm voices, and those entries go unused. Rhythm mode
+exists only on bank 0, so the bass drum and the four single-operator drums
+play there alone. Their `0xC0` has all four output bits set (`0xF0`), and
+they get the plain unpanned volume: the drums are centred. The key-shift
+feature (a per-channel transpose) is applied to these voices too.
+
+That is IMPLAY's stereo mode, used when it finds an OPL3 or a Sound Blaster
+Pro, and reported as "STEREO". Otherwise it plays mono on one OPL2. The
+driver also has a third mode that sends everything to both banks, rhythm
+section included, as two separate OPL2 chips would need. Nothing in IMPLAY
+3.1 ever selects it.
 
 ## 12. Emulation notes
 

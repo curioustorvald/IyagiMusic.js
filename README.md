@@ -1,20 +1,23 @@
 # IyagiMusic.js
 
-이야기 뮤직 사운드(`.ims`)와 애드립 ROL(`.rol`) 음악을 웹 브라우저에서
+이야기 뮤직 사운드(`.ims`), 노트(`.sop`), 애드립 ROL(`.rol`) 음악을 웹 브라우저에서
 재생하기 위한 라이브러리와 포맷 문서입니다.
 
 `.ims`는 1990년대 초 PC통신 접속기 **이야기**가 애드립 카드로 음악을
 재생하기 위해 쓰던 파일 형식입니다. 애드립의 ROL 포맷을 고쳐 만든 것이고, 곡
 제목과 가사는 2바이트 조합형 한글로 들어 있습니다.
 
+`.sop`은 같은 시절 같은 게시판에서 돌던 Note라는 시퀀서의 형식으로, 이야기 것이 아니고 OPL2 것도 아닙니다.
+성부 스무 개, 4연산자 음색, 좌우 정위를 쓰는 OPL3 포맷이라 OPL3로 재생합니다. 
+
 ## 상태
 
-`.ims`와 `.rol`을 브라우저에서 재생합니다. 가사(`.iss`)도 박자에 맞춰 보여
-줍니다.
+`.ims`, `.rol`, `.sop`을 브라우저에서 재생합니다. 가사(`.iss`)도 박자에 맞춰 보여
+줍니다. 가사의 색칠은 이야기의 재생기 IMPLAY가 칠하던 규칙 그대로입니다.
 
 | | 상태 |
 |---|---|
-| 포맷 명세 (`.ims` / `.bnk` / `.rol` / `.iss`) | 있음 |
+| 포맷 명세 (`.ims` / `.bnk` / `.rol` / `.iss` / `.sop`) | 있음 |
 | 재생 엔진 명세 | 있음 |
 | 조합형 → 유니코드 변환기 (JS / Python) | 있음, 검증됨 |
 | OPL2(YM3812) · OPL3(YMF262) 에뮬레이터 | 있음, 자체 구현 |
@@ -28,16 +31,25 @@
 | 문서 | 내용 |
 |---|---|
 | [`docs/FILE_FORMATS.ko.md`](docs/FILE_FORMATS.ko.md) · [en](docs/FILE_FORMATS.en.md) | `.ims`, `.bnk`, `.rol`, `.iss`의 바이트 배치 |
-| [`docs/ENGINE_SPEC.ko.md`](docs/ENGINE_SPEC.ko.md) · [en](docs/ENGINE_SPEC.en.md) | 이벤트를 OPL2 레지스터 쓰기로 바꾸는 방법 |
+| [`docs/ENGINE_SPEC.ko.md`](docs/ENGINE_SPEC.ko.md) · [en](docs/ENGINE_SPEC.en.md) | 이벤트를 OPL2 레지스터 쓰기로 바꾸는 방법, 그리고 IMPLAY가 OPL3로 스테레오를 만든 방법 |
 | [`docs/JOHAB_ENCODING.ko.md`](docs/JOHAB_ENCODING.ko.md) · [en](docs/JOHAB_ENCODING.en.md) | 2바이트 조합형 한글 인코딩 |
-| [`docs/SOP_FORMAT.ko.md`](docs/SOP_FORMAT.ko.md) · [en](docs/SOP_FORMAT.en.md) | `.sop`의 바이트 배치. 이야기 것이 아닌 OPL3 트래커 포맷 |
+| [`docs/SOP_FORMAT.ko.md`](docs/SOP_FORMAT.ko.md) · [en](docs/SOP_FORMAT.en.md) | `.sop`의 바이트 배치. 이야기 것이 아닌 OPL3 시퀀서 포맷 |
 | [`docs/OPL2_NOTES.en.md`](docs/OPL2_NOTES.en.md) | 이 저장소의 OPL 에뮬레이터에서 무엇이 정확하고 무엇이 근사인지 |
 | [`docs/OPL3_NOTES.en.md`](docs/OPL3_NOTES.en.md) | 그중 OPL3가 더한 부분 — 둘째 뱅크, 4오퍼레이터, 스테레오, 파형 4–7 |
 
 명세는 공개된 포맷 설명에서 출발해, `.ims` 1128개 · `.bnk` 450개 · `.iss`
 680개 · `.rol` 2개로 이루어진 코퍼스를 직접 측정하여 고치고 보강한 것입니다.
-*(측정)* 표시가 붙은 서술은 그 코퍼스의 모든 파일에서 확인했습니다. 알려진
-자료와 실제 데이터가 어긋나는 곳은 본문에 그대로 적어 두었습니다.
+*(측정)* 표시가 붙은 서술은 그 코퍼스의 모든 파일에서 확인했습니다. 코퍼스는
+그 뒤 `.ims` 1725개 · `.bnk` 475개 · `.iss` 1031개 · `.sop` 347개로 늘었고,
+늘어난 코퍼스에서 다시 잰 서술에는 *(측정, 1725)*처럼 그때의 파일 수를 함께
+적었습니다.
+
+이 중 `.ims`, `.iss`, `.sop`은 이 파일들을 실제로 만들고 재생하던 프로그램 —
+재생기 IMPLAY.EXE 3.1과 시퀀서 NOTE.EXE — 를 디스어셈블하여 추가로
+보강하였습니다. 그렇게 알아낸 서술에는 *(IMPLAY.EXE)*, *(NOTE.EXE)* 표시를
+붙였습니다. 코퍼스를 잰 것이 아니라 그 프로그램이 어떻게 동작하는지를 읽어 낸
+것입니다. 알려진 자료와 실제 데이터, 또는 원래 프로그램과 이 라이브러리가
+어긋나는 곳은 본문에 그대로 적어 두었습니다.
 
 ## 설치
 
@@ -53,7 +65,7 @@ npm install iyagimusic
 | 진입점 | 내용 |
 |---|---|
 | `iyagimusic` | `IyagiMusic`과 자주 쓰는 것들 |
-| `iyagimusic/formats` | `.ims` · `.bnk` · `.rol` · `.iss` 판독기 |
+| `iyagimusic/formats` | `.ims` · `.bnk` · `.rol` · `.iss` · `.sop` 판독기 |
 | `iyagimusic/johab` | 조합형 → 유니코드 |
 | `iyagimusic/opl` · `/opl/constants` · `/opl/tables` | OPL2 · OPL3 에뮬레이터 |
 | `iyagimusic/driver` · `/sequencer` | 이벤트를 레지스터 쓰기로, 그리고 클럭 |
@@ -101,6 +113,21 @@ music.patchNames;          // 성부마다 지금 걸려 있는 뱅크 음색 �
 ```
 
 읽을 때마다 피크 누산기가 비워지므로 한 화면에 한 번씩만 부르면 됩니다.
+
+가사를 직접 그리려면 `iyagimusic/formats`의 `parseIss`와 `resolveIssSpans`를
+쓰십시오. `resolveIssSpans`는 레코드마다 그 순간 켜져 있는 칸을
+`{line, runs}`로 돌려줍니다. `runs`는 `[from, to)` 칸 범위의 목록이고, 범위 사이의
+틈은 꺼진 칸입니다 — IMPLAY는 레코드가 덮지 않는 괄호나 점을 끝내 칠하지
+않습니다(FILE_FORMATS §4.2). 예전의 `{line, from, to}` 한 구간은 더 이상
+돌려주지 않습니다.
+
+```js
+import { parseIss, resolveIssSpans } from "iyagimusic/formats";
+
+const iss = parseIss(issBytes);   // 옛 형식 헤더면 틱 단위도 알아서 맞춥니다
+const spans = resolveIssSpans(iss);
+// iss.cues[i].tick이 지나면 spans[i]를 그립니다
+```
 
 성부 수는 칩과 모드가 정하지만 규칙은 하나입니다. **리듬 성부는 언제나 맨 뒤
 다섯 개**입니다 — 열하나 중 6–10이든 스물 중 15–19든 마찬가지라, 표시하는 쪽은

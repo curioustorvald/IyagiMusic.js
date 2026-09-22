@@ -125,32 +125,63 @@ test("ISS credit fields are tool defaults, not credits", { skip: !have }, () => 
   assert.deepEqual([...seen.writer].sort(), ["KimTH", "LeeYS", "MunBK", "This", "WRITER"]);
 });
 
-test("an ISS cue is the right edge of the highlight, not an isolated run", { skip: !have }, () => {
-  const root = MEGA;
-  const iss = parseIss(new Uint8Array(fs.readFileSync(path.join(root, "AGP-DEUX.ISS"))));
+test("an ISS cue paints its own cells, and only IMPLAY's two rules clear them", { skip: !have }, () => {
+  // FILE_FORMATS §4.2, from IMPLAY's disassembly. Each case below is what
+  // IMPLAY shows on screen for AGP-DEUX.ISS.
+  const iss = parseIss(new Uint8Array(fs.readFileSync(path.join(MEGA, "AGP-DEUX.ISS"))));
   const spans = resolveIssSpans(iss);
+  const cells = (text) => [...text].flatMap((ch) => (ch.codePointAt(0) >= 0x80 ? [ch, ""] : [ch]));
+  const litText = (span) => {
+    const c = cells(iss.lines[span.line]);
+    return span.runs.map(([a, b]) => c.slice(a, b).join(""));
+  };
+  const lastOn = (line) => spans.findLast((s) => s.line === line);
 
-  // An ordinary lyric line wipes left to right: the region only ever grows.
-  const lyric = spans.filter((s, i) => iss.cues[i].line === 11);
-  assert.ok(lyric.length > 5);
-  assert.ok(lyric.every((s) => s.from === lyric[0].from), "the left edge should stay put");
-  assert.ok(lyric.every((s, i) => i === 0 || s.to >= lyric[i - 1].to), "the wipe should not retreat");
+  // Line 18 wipes left to right, but no record covers the parentheses, so
+  // they never light: "둘러 싸여져 있는데 -- (워 - ----)".
+  const wipe = litText(lastOn(18));
+  assert.ok(wipe.includes("워"));
+  assert.ok(!wipe.join("").includes("(") && !wipe.join("").includes(")"));
 
-  // The DEUX banner uses the same records as an animation: its right edge runs
-  // out and comes back, which is what reads as a volume meter.
-  const banner = spans.filter((s, i) => iss.cues[i].line === 60).slice(0, 30);
-  const edges = banner.map((s) => s.to);
-  assert.ok(Math.max(...edges) - Math.min(...edges) > 12, "the bar should have real travel");
-  let reversals = 0;
-  for (let i = 2; i < edges.length; i++) {
-    if (Math.sign(edges[i] - edges[i - 1]) !== Math.sign(edges[i - 1] - edges[i - 2])) reversals++;
+  // "F.o.n.y △ S.e.r.y": one record per letter, so only the eight letters.
+  assert.deepEqual(litText(spans.find((s) => s.line === 62 && s.runs.length)).join(""), "FonySery");
+
+  // The D · E · U · X banner: a record starting left of the last one's end
+  // clears the line, so what is lit keeps shrinking back instead of filling
+  // once and staying -- a light that travels and flashes.
+  const banner = spans.filter((s) => s.line === 60);
+  const litCount = (s) => s.runs.reduce((n, [a, b]) => n + b - a, 0);
+  let clears = 0;
+  for (let i = 1; i < banner.length; i++) if (litCount(banner[i]) < litCount(banner[i - 1])) clears++;
+  assert.ok(clears > 200, `the banner cleared only ${clears} times in ${banner.length} records`);
+});
+
+test("old-header ISS files store ticks in tenths, and IMPLAY scales them", { skip: !have }, () => {
+  // FILE_FORMATS §4.1-4.2: without "IMPlay Song V" in the header IMPLAY takes
+  // the tick field as tick / 10. Read that way, the old files' last records
+  // land where the V2 files' do, near the end of their song.
+  const ratios = { v2: [], old: [] };
+  for (const fn of fs.readdirSync(MEGA)) {
+    if (!/\.ISS$/i.test(fn)) continue;
+    const ims = fs.readdirSync(MEGA).find((f) => f.toUpperCase() === fn.toUpperCase().replace(/ISS$/, "IMS"));
+    if (!ims) continue;
+    const iss = parseIss(new Uint8Array(fs.readFileSync(path.join(MEGA, fn))));
+    if (!iss?.cues.length) continue;
+    let song;
+    try { song = parseIms(new Uint8Array(fs.readFileSync(path.join(MEGA, ims)))); } catch { continue; }
+    let end = 0;
+    for (const e of imsEvents(song)) end = e.tick;
+    if (end) ratios[iss.v2 ? "v2" : "old"].push(iss.cues.at(-1).tick / end);
   }
-  assert.ok(reversals >= 3, `the bar should bounce; saw ${reversals} reversals`);
+  const median = (a) => a.sort((x, y) => x - y)[a.length >> 1];
+  assert.ok(ratios.old.length > 100 && ratios.v2.length > 500);
+  assert.ok(Math.abs(median(ratios.old) - median(ratios.v2)) < 0.05,
+    `old ${median(ratios.old).toFixed(3)} vs V2 ${median(ratios.v2).toFixed(3)}`);
 });
 
 test("ISS cues tile a lyric line contiguously", { skip: !have }, () => {
-  // The evidence for the accumulating reading: cue runs abut each other rather
-  // than scattering, so they describe one growing region.
+  // Why the painted cells are left standing: cue runs abut each other rather
+  // than scattering, so together they wipe the line (FILE_FORMATS §4.2).
   const root = MEGA;
   let abutting = 0, total = 0;
   for (const fn of fs.readdirSync(root)) {

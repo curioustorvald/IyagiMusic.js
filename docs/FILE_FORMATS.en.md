@@ -99,12 +99,18 @@ Running status applies to `8n`–`En` exactly as in MIDI: a byte < 0x80 in the
 status position re-uses the previous channel status. *(measured: 853 066
 running-status events across the corpus.)*
 
-What `F0` and `FC` do to running status is **undetermined**. The two reference
-players disagree — one leaves the previous channel status live, the other
-overwrites it with the `F0`/`FC` byte — and no corpus file can tell them apart,
+`F0` and `FC` **leave running status alone**: the previous channel status stays
+live across them. That is what IMPLAY does *(IMPLAY.EXE)* — its interpreter
+stores a status byte as the running status only when it is not `F0`, `F8` or
+`FC`. Of the two widely-circulated players, one agrees and the other overwrites
+running status with the `F0`/`FC` byte. No corpus file can tell them apart,
 because all 7394 tempo events are followed by an explicit status byte
-*(measured)*. Require an explicit status byte after `F0` and `FC`; a writer
-must never carry running status across a tempo event.
+*(measured)*. A reader should follow IMPLAY. A writer should still never carry
+running status across a tempo event, because some players do not.
+
+Tagged *(IMPLAY.EXE)*: read out of the disassembly of `IMPLAY.EXE` 3.1
+(1993), the Korean player these files were made for and heard on. That is
+the program's behaviour, not a measurement of the corpus.
 
 `An` taking **one** data byte instead of MIDI's two is the single most
 important deviation. Get it wrong and the stream desynchronises within a few
@@ -129,12 +135,19 @@ corpus is 235.
 sets the **channel volume** and then the note sounds. `vv == 0` is a note off
 and leaves the channel volume alone.
 
+IMPLAY does not key the voice off before a `9n` note-on *(IMPLAY.EXE)*. So a
+note-on landing on a voice that is still sounding changes pitch without a new
+attack. On real data this never comes up: across the corpus only 7 note-ons
+land on a keyed voice, all in the three damaged files of §1.5 *(measured)*.
+
 **Note off / retrigger (`8n nn vv`).** This is where the sources disagree.
 The wiki says: stop the current note, then start `nn` if `vv > 0`. A
-widely-circulated player instead always restarts the note. **The question is
-moot on real data**: `vv` is non-zero in all 3 131 803 `8n` events in the
-corpus *(measured)*. Either reading reproduces every known file. Implement the
-wiki's guarded form; it is the safer of the two.
+widely-circulated player instead always restarts the note. IMPLAY does what
+the wiki says *(IMPLAY.EXE)*: note off, then, only if `vv > 0`, set the
+volume and start `nn`. (A switch in IMPLAY, whose purpose has not been traced,
+can force the plain note-off.) **The question is moot on real data** anyway: `vv` is
+non-zero in all 3 131 803 `8n` events in the corpus *(measured)*. Implement
+the guarded form.
 
 **Volume (`An vv`).** 0–127, scales the patch's own output level. It applies
 even while a note is sounding and even after the note has been released, which
@@ -144,6 +157,13 @@ is how these files do fades and swells.
 (§1.6), *not* a General MIDI programme. Every file in the corpus begins with a
 run of `Cn` events — one per channel — before any note. All `ii` values are
 within the table *(measured)*.
+
+A name the bank does not have is not silence in IMPLAY *(IMPLAY.EXE)*. The
+voice gets one of the AdLib driver's built-in timbres instead: the piano for
+a melodic voice, and in percussive mode the bass drum, snare, tom, cymbal or
+hi-hat default for channels 6–10. The same happens to every voice when no
+bank could be loaded at all. The piano is the driver's own, except that its
+carrier attack is 13 where the driver has 15.
 
 **Pitch bend (`En ll mm`).** Standard MIDI 7-bit packing:
 `value = ll | (mm << 7)`, 0…16383, centre 8192. Both data bytes are always
@@ -173,8 +193,24 @@ them, so the wiki's "total number of MIDI events" is wrong.
 
 `totalTick` is the sum of all delays in 904 of 1128 files. In the other 224 it
 is **short** — sometimes drastically (one file claims 112 620 ticks against an
-actual 211 540). Treat it as a display hint. The `FC` event is what ends the
-song.
+actual 211 540). The `FC` event is what ends the stream.
+
+**IMPLAY stops at `totalTick` anyway** *(IMPLAY.EXE)*. Its interpreter adds
+each delay to a tick counter and ends the song as soon as the counter reaches
+`totalTick`, whether or not `FC` has come. It never recomputes the field on
+load. So in the player these files were heard on, `totalTick` is where the
+song ends, not a display hint. Over the grown corpus that matters for 315 of
+1725 files, and for all but three of them it only trims silence. In the
+other 312 the last note-on comes before `totalTick`, and what follows is a
+silent tail before `FC`. Its median is 20 beats. `MM-RAIN.IMS` has about
+23 700 beats of it, which is over three hours at its tempo *(measured, 1725)*.
+The three exceptions are the damaged `SPRING.IMS` and `BT-REDMO.IMS` (below)
+and one intact song, `D-PRODC#.IMS`, whose `totalTick` of 57 840 would cut
+it off at beat 241 of about 1070. Three more files have a `totalTick`
+*longer* than their stream; there `FC` ends them first.
+
+This library plays to `FC`. That is the documented disagreement: it keeps
+`D-PRODC#.IMS` whole, at the price of the silent tails IMPLAY never played.
 
 Likewise `dataSize` is authoritative for finding the patch table, but one
 corpus file (`HB-NOTGO.IMS`) has 838 bytes of extra event data after its patch
@@ -418,7 +454,7 @@ ignore it entirely.
 
 | Off | Type       | Name       | Notes |
 |-----|------------|------------|-------|
-| 0   | `char[20]` | headStr    | `"IMPlay Song V2.0"` (662 files) or `"…V2.1"` (15) |
+| 0   | `char[20]` | headStr    | `"IMPlay Song V2.0"`, `"…V2.1"`, or blank — decides the tick unit, §4.2 |
 | 20  | `u8[10]`   | reserved   | |
 | 30  | `char[30]` | writer     | lyricist, Johab |
 | 60  | `char[30]` | composer   | Johab |
@@ -455,55 +491,126 @@ ignore it entirely.
 > into `writer`, which is why `writer` reads `G1.PCX`, `MOON.PCX`, `IRL.PCX`
 > or `OVE.PCX` — the whole names are `XWING1.PCX`, `LEE_MOON.PCX`,
 > `AIRGIRL.PCX` and `NO_LOVE.PCX`. And `GOODDAY.ISS` has lyric text where
-> `headStr` and the credits should be. IMPLAY plays it, so it is this
-> section's description of the header, not the file, that falls short there;
-> 163 files leave `headStr` blank, and the older header is not yet written
-> down.
+> `headStr` and the credits should be.
+>
+> The `WRITER` / `COMPOSER` / `SINGER` / `EDITOR` labels come from IMPLAY
+> itself *(IMPLAY.EXE)*. Its built-in lyric editor fills the four fields with
+> exactly those strings when it starts a new file, and it has no way to type
+> anything else into them.
+
+**`headStr` is a version mark, and IMPLAY reads nothing else from it**
+*(IMPLAY.EXE)*. IMPLAY 3.1's editor saves it as `sprintf("%-20s",
+"IMPlay Song V2.0")`, space-padded to all twenty bytes with the terminating
+NUL landing on byte 20. On load IMPLAY runs `strstr` for `IMPlay Song V`
+over the header read as a C string, and uses the answer for one thing: the
+unit of the tick field (§4.2). The corpus holds 850 `V2.0`, 17 `V2.1`,
+163 blank headers and `GOODDAY.ISS` *(measured, 1031)*. The last two groups
+are the older format. `GOODDAY.ISS`'s lyric text is harmless to IMPLAY,
+because apart from that search it reads only the two counts at 150 and 152,
+and for the credit display the four fields. Nothing in IMPLAY 3.1 reads bytes
+20–29, so the `.PCX` names are not a backdrop *this* player shows. Whichever
+tool wrote them, it was another one.
 
 ### 4.2 Highlight records — `recCount` * 5 bytes
 
 | Type  | Name    | Notes |
 |-------|---------|-------|
-| `u16` | tick8   | playback tick **divided by 8** |
+| `u16` | tick    | when to paint: song tick **÷ 8** in a V2 file, **÷ 10** in an old one |
 | `u8`  | line    | script line index, 0-based |
-| `u8`  | startX  | first character cell to colour, 0-based |
-| `u8`  | widthX  | number of character cells to colour |
+| `u8`  | startX  | first character cell to paint, 0-based |
+| `u8`  | widthX  | number of character cells to paint |
 
 All three byte fields are **unsigned**. Read them as signed and 12 218 of the
 corpus's records point at a negative line. *(measured.)*
 
-`tick8` is non-decreasing in 590 of 680 files; sort defensively.
+**The tick unit depends on the header** *(IMPLAY.EXE)*. A file whose header
+contains `IMPlay Song V` (§4.1) stores `tick / 8`. Any other file stores the
+older unit, `tick / 10`, and IMPLAY converts it on load with integer
+arithmetic, `stored * 10 / 8`, before multiplying by 8 like any V2 value.
+Reading an old file as V2 runs its lyrics at four-fifths of the song's
+pace. The corpus shows the same thing independently. Against the length of
+their song, the old files' last records sit at a median 0.744 read as V2,
+and 0.93 read as tenths, while the V2 files sit at 0.977 *(measured, 1031)*.
+The largest stored value in an old file is 29 034, so the conversion never
+overflows its sixteen bits.
 
-**A record is the right edge of the highlight, not the highlight.** The
-coloured region runs from the leftmost column the line has reached so far up
-to `startX + widthX`; everything to the right of that is uncoloured, and
-moving to another line starts over. Colouring only `[startX, startX+widthX)`
-in isolation lights one syllable at a time, which is not what these files
-describe:
+**Records play in file order** *(IMPLAY.EXE)*. IMPLAY keeps an index into
+the records and, while the clock has passed the indexed record's tick, paints
+it and moves on. It never sorts. A record stored earlier than the one before
+it therefore fires straight after that one, not at its own tick. That
+affects 665 records in 103 files *(measured, 1031)*. Sorting on load, as this
+section used to advise, moves them to where their tick says, which is not
+where IMPLAY ever showed them.
+
+**A record paints its own cells, and painted cells stay lit** *(IMPLAY.EXE)*.
+Each record colours `[startX, startX + widthX)` on its line and nothing else.
+The line is redrawn unlit, and painting starts over from the current record,
+on exactly two occasions:
+
+1. the record names a different line from the one showing, or
+2. its `startX` is left of where the previous painted record ended.
 
 ```
-coloured = [ min(startX seen on this line), startX + widthX )
+if record.line != shown  or  record.startX < lastEnd:
+    shown = record.line;  clear the line
+paint record;  lastEnd = where it ended
 ```
 
-The evidence is in how the records tile. On an ordinary lyric line the gap
-between one record's end and the next one's start is **0** in 168 527 corpus
-cases and **1** — a space — in 75 582 *(measured)*, so the records abut and
-the region grows a syllable at a time. That is the familiar karaoke wipe, and
-it is why a line's first record is often a wide one starting at column 0: it
-paints the indent so the wipe begins flush with the margin.
+So on an ordinary lyric line the records tile, rule 2 never fires, and what is
+lit is the union of every record so far — the karaoke wipe. The gap between
+one record's end and the next one's start is **0** in 168 527 corpus cases
+and **1** — a space — in 75 582 *(measured)*. That is also why a line's first
+record is often a wide one starting at column 0: it paints the indent.
 
-The same records get used for animation. `AGP-DEUX.ISS` line 60 — a `D · E ·
-U · X` banner — carries 691 of them, and its right edge runs
-`25 30 35 40 · 24 40 38 35 33 30 28 25 24 · 40 38 …`: a bar that shoots out
-and drains back, three times over, then sweeps smoothly to the end. It reads
-as a volume meter, which is exactly how it looks under Iyagi. 168 corpus lines
-carry more than sixty records and are doing this rather than singing.
+The cells no record covers **never light**. `AGP-DEUX.ISS` line 18,
+`둘러 싸여져 있는데 -- (워 - ----)`, has records for the syllables and the
+dashes but none for the two parentheses, and IMPLAY leaves them unlit. Line
+62, `F.o.n.y △ S.e.r.y`, has one record per letter, and only the eight
+letters light. On screen that matters only for a non-space. IMPLAY colours
+the text, not the cell, so an unlit space looks just like a lit one.
 
-*Both halves of this rule were checked against Iyagi itself, running under
-DOSBox: a lyric line fills left to right the way karaoke does, and the banner's
-bar travels rather than filling once and staying.*
+Rule 2 is what the same records use for animation. `AGP-DEUX.ISS` line 60, a
+`D · E · U · X` banner, carries 691 records. Their start column keeps jumping
+back — `24 29 34 39 · 23 39 36 34 31 29 26 24 · 23 39 …`. Each jump clears
+the banner, so the light is a single mark that travels and flashes across the
+letters, and now and then a spread of a few cells that sweeps to the right.
+`ZAZA1.ISS` runs a light right to left through the letters of each word of
+`IMS(ROL) Made By PIAZZA (NOW SV)` the same way. 168 corpus lines carry more
+than sixty records and are doing this rather than singing.
 
-`resolveIssSpans()` in `src/formats.js` implements the rule.
+This section used to describe records as the *right edge* of one growing
+region, coloured from the leftmost column the line had reached:
+`coloured = [ min(startX seen on this line), startX + widthX )`. It came from
+the tiling statistics above, and was checked against Iyagi under DOSBox:
+lyric lines fill left to right, and the banner travels rather than filling
+once. Both observations still hold, and the rule above explains both. But
+the old rule lights every gap between the first record and the current one —
+the parentheses, the dots — and reads the banner as a volume bar, which is
+not what IMPLAY draws.
+
+The details of IMPLAY's painter *(IMPLAY.EXE)*:
+
+- A record's span is clamped to the line's length, which is up to its first
+  NUL. If `startX` falls on the second byte of a two-byte character, it moves
+  on by one. The test is IMPLAY's own: an odd run of bytes ≥ 0x80 ending just
+  before `startX`. The end is not adjusted.
+- Leading spaces of the span are skipped. A span that is all spaces paints
+  nothing, but still counts as the previous record for rule 2.
+- `lastEnd` is where the painted span ended after clamping, and is 0 right
+  after a clear.
+- Records that come due in the same pass are one batch. Within a batch, rule
+  2 compares against the state at the start of the batch, updated only by a
+  clearing record. If a record in the batch clears, the records before it are
+  never shown. Passes follow the clock, so only records sharing a tick are
+  batched for certain.
+- Before a new line's first record, when no record is due, IMPLAY shows that
+  line early, unlit. It does this a quarter of the gap between the two
+  records before the first record's tick, with the gap capped so that the
+  line is never more than four beats early (`tickBeat` 240).
+
+`resolveIssSpans()` in `src/formats.js` implements the rule. It batches only
+records with the same tick, and reports a batch's final state for every
+record in it.
 
 ### 4.3 Script lines — `lineCount` * 64 bytes
 
@@ -519,3 +626,11 @@ gives the rule and the ways of getting it wrong.
 
 `154 + 5 * recCount + 64 * lineCount` equals the file size exactly for all 680
 corpus files *(measured)*.
+
+Where IMPLAY puts a line on its normal screen, it keeps the file's own layout:
+character cell `c` is drawn at column `c + 3`, eight pixels a column
+*(IMPLAY.EXE)*. So the indentation in the file is the indentation on screen.
+IMPLAY also has a second display, drawn at twelve pixels a cell, that ignores
+it. There each line is centred on its visible text, using two bytes the loader
+computes per line: the count of leading spaces, and half the width from the
+first non-space to the last.

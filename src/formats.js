@@ -136,9 +136,13 @@ export class FormatError extends Error {}
  */
 
 /**
- * One lyric cue: the right edge of a highlight, not an isolated run. §4.2.
+ * One lyric cue: a run of cells to paint, on top of whatever the line already
+ * has painted. §4.2.
  * @typedef {object} IssCue
- * @property {number} tick already multiplied back up by 8
+ * @property {number} tick when IMPLAY paints it, in song ticks -- the stored
+ *   value scaled to ticks (§4.2) and held back behind any earlier record in
+ *   the file, because IMPLAY walks the records in file order
+ * @property {number} stored the record's own tick field, as stored
  * @property {number} line @property {number} startX @property {number} widthX
  */
 
@@ -146,13 +150,21 @@ export class FormatError extends Error {}
  * Timed lyrics. §4.
  * @typedef {object} Iss
  * @property {string} signature
+ * @property {boolean} v2 whether the header says `IMPlay Song V`, which is
+ *   what decides the unit of the tick field; §4.1
  * @property {string} writer @property {string} composer
  * @property {string} singer @property {string} editor
  * @property {string[]} lines 64-cell text lines, Johab-decoded
- * @property {IssCue[]} cues sorted by tick
+ * @property {Uint8Array[]} lineBytes the same lines as stored, up to the first
+ *   NUL; the highlight rule counts in these bytes (§4.2)
+ * @property {IssCue[]} cues in file order, which is also tick order
  */
 
-/** A resolved highlight, in character cells. @typedef {{line: number, from: number, to: number}} IssSpan */
+/**
+ * What is lit after a cue has been painted, in character cells: `runs` are
+ * disjoint half-open `[from, to)` ranges, left to right, all on `line`.
+ * @typedef {{line: number, runs: number[][]}} IssSpan
+ */
 
 /**
  * One entry of a SOP's instrument table. `data` is left packed -- these are
@@ -386,8 +398,8 @@ export function* imsEvents(song) {
     let status = d[i];
     if (status & 0x80) {
       i++;
-      // §1.2: F0/FC leave running status undetermined, so we neither set nor
-      // trust it across them -- the corpus never relies on either reading.
+      // §1.2: F0 and FC leave running status alone -- IMPLAY only records a
+      // channel status -- though no corpus file leans on that.
       if (status < 0xf0) running = status;
     } else {
       status = running;
@@ -499,19 +511,38 @@ export function parseIss(data, options) {
   if (ISS_HEADER_SIZE + ISS_RECORD_SIZE * recCount + ISS_LINE_SIZE * lineCount > b.length) {
     return null;
   }
+  // §4.1: IMPLAY looks for this anywhere in the header, read as a C string --
+  // so up to the first NUL, which may lie past the 20 bytes of headStr.
+  let headEnd = 0;
+  while (headEnd < ISS_HEADER_SIZE && b[headEnd] !== 0) headEnd++;
+  const v2 = String.fromCharCode(...b.subarray(0, headEnd)).includes("IMPlay Song V");
   const iss = {
     signature: text(b, 0, 20, options),
+    v2,
     writer: text(b, 30, 30, options),
     composer: text(b, 60, 30, options),
     singer: text(b, 90, 30, options),
     editor: text(b, 120, 30, options),
     lines: [],
+    lineBytes: [],
     cues: [],
   };
+  // §4.2: IMPLAY walks the records in file order and paints each one once the
+  // clock has passed it, so a record stored earlier than its predecessor
+  // fires straight after that predecessor rather than at its own tick.
+  // Sorting would put 665 corpus records back where their tick says, which is
+  // not where anyone who made these files ever saw them.
+  let due = 0;
   for (let i = 0; i < recCount; i++) {
     const o = ISS_HEADER_SIZE + i * ISS_RECORD_SIZE;
+    const stored = dv.getUint16(o, true);
+    // §4.2: V2 files store tick / 8. Older ones store tick / 10, and IMPLAY
+    // converts on load with this exact integer arithmetic.
+    const tick8 = v2 ? stored : ((stored * 10) >> 3) & 0xffff;
+    due = Math.max(due, tick8 * 8);
     iss.cues.push({
-      tick: dv.getUint16(o, true) * 8,   // §4.2: stored divided by 8
+      tick: due,
+      stored,
       line: b[o + 2],                    // all three are UNSIGNED
       startX: b[o + 3],
       widthX: b[o + 4],
@@ -519,30 +550,46 @@ export function parseIss(data, options) {
   }
   const lineBase = ISS_HEADER_SIZE + recCount * ISS_RECORD_SIZE;
   for (let i = 0; i < lineCount; i++) {
-    iss.lines.push(text(b, lineBase + i * ISS_LINE_SIZE, ISS_LINE_SIZE, options));
+    const from = lineBase + i * ISS_LINE_SIZE;
+    let end = from;
+    while (end < from + ISS_LINE_SIZE && b[end] !== 0) end++;
+    iss.lineBytes.push(b.slice(from, end));
+    iss.lines.push(text(b, from, ISS_LINE_SIZE, options));
   }
-  iss.cues.sort((x, y) => x.tick - y.tick);   // §4.2: 90 of 680 files need this
   return iss;
 }
 
 /**
- * Resolve each ISS cue into the span of cells that should be coloured when it
- * is current. Returns an array parallel to `iss.cues`, each `{line, from, to}`
- * in character cells.
+ * IMPLAY's test for "this byte is the second half of a two-byte character":
+ * count the unbroken run of high bytes that ends just before it. An odd run
+ * means `pos` sits inside a character. It is a heuristic -- a Johab trail byte
+ * can be below 0x80 -- but it is the one the highlight goes by. §4.2.
+ */
+function isTrailByte(bytes, pos) {
+  if (pos === 0 || bytes[pos - 1] < 0x80) return false;
+  let run = 0;
+  let p = pos;
+  while (p > 0 && bytes[p - 1] >= 0x80) { run++; p--; }
+  return (run & 1) === 1;
+}
+
+/**
+ * Resolve each ISS cue into what is lit once it has been painted. Returns an
+ * array parallel to `iss.cues`, each `{line, runs}` with `runs` the lit cells
+ * as disjoint `[from, to)` ranges.
  *
- * A cue is not the highlight -- it is the *right edge* of it. The coloured
- * region runs from the leftmost column the line has reached so far up to
- * `startX + widthX`, and moving to another line starts over. Reading each cue
- * as its own isolated run instead lights one syllable at a time, which is not
- * what these files describe.
+ * This is IMPLAY's painter, from its disassembly (§4.2). A cue paints its own
+ * cells, `[startX, startX + widthX)`, and nothing else. What it paints stays
+ * lit, so cues that tile a line left to right build the karaoke wipe, and the
+ * cells no cue covers -- the parentheses in `AGP-DEUX.ISS`'s "(워 - ----)",
+ * the dots between the letters of "F.o.n.y" -- never light. The line is
+ * cleared and painting starts over when a cue names another line, or when it
+ * starts left of where the previous cue ended; that second rule is what makes
+ * a banner's light travel and flash instead of filling once and staying.
  *
- * On an ordinary lyric line the cues tile the text left to right -- the gap
- * between one cue's end and the next cue's start is 0 in 168 527 corpus cases
- * and 1 (a space) in 75 582 -- so the region grows a syllable at a time and
- * the effect is the familiar karaoke wipe. The idiom also gets used for
- * animation: a banner line whose right edge runs out and back reads as a
- * volume meter, and 168 corpus lines carry more than sixty cues doing exactly
- * that.
+ * Cues that come due on the same tick are painted as one batch, as IMPLAY
+ * does, and every cue of a batch reports the batch's final state -- IMPLAY
+ * never shows the ones in between.
  *
  * @param {Iss} iss
  * @returns {IssSpan[]}
@@ -550,13 +597,59 @@ export function parseIss(data, options) {
 export function resolveIssSpans(iss) {
   const out = [];
   let line = -1;
-  let origin = 0;
-  for (const cue of iss.cues) {
-    if (cue.line !== line) { line = cue.line; origin = cue.startX; }
-    else if (cue.startX < origin) origin = cue.startX;
-    out.push({ line, from: origin, to: cue.startX + cue.widthX });
+  let lastEnd = 0;       // where the last painted cue ended; 0 after a clear
+  /** @type {number[][]} */
+  let lit = [];
+  const cues = iss.cues;
+  for (let first = 0; first < cues.length;) {
+    let stop = first + 1;
+    while (stop < cues.length && cues[stop].tick === cues[first].tick) stop++;
+
+    // Which cue of the batch, if any, clears the line. The comparison is
+    // against the batch's opening state, updated only by a clearing cue --
+    // exactly as IMPLAY keeps it -- and with the clearing cue's raw extent.
+    let from = first;
+    let reach = lastEnd;
+    let cleared = false;
+    for (let i = first; i < stop; i++) {
+      const cue = cues[i];
+      if (cue.line !== line || cue.startX < reach) {
+        line = cue.line;
+        reach = cue.startX + cue.widthX;
+        from = i;
+        cleared = true;
+      }
+    }
+    if (cleared) { lit = []; lastEnd = 0; }
+
+    const bytes = iss.lineBytes?.[line] ?? new Uint8Array(0);
+    for (let i = from; i < stop; i++) {
+      const cue = cues[i];
+      const len = bytes.length;
+      const end = Math.min(cue.startX + cue.widthX, len);
+      let start = Math.min(cue.startX, len);
+      if (isTrailByte(bytes, start)) start++;
+      const n = Math.max(0, end - start);
+      let lead = 0;
+      while (lead < n && bytes[start + lead] === 0x20) lead++;
+      lastEnd = start + n;
+      if (lead < n) lit = addRun(lit, start + lead, start + n);
+    }
+    for (let i = first; i < stop; i++) out.push({ line, runs: lit.map((r) => r.slice()) });
+    first = stop;
   }
   return out;
+}
+
+/** Merge `[from, to)` into disjoint, sorted runs. */
+function addRun(runs, from, to) {
+  const merged = [];
+  for (const [a, b] of runs) {
+    if (b < from || a > to) merged.push([a, b]);
+    else { from = Math.min(from, a); to = Math.max(to, b); }
+  }
+  merged.push([from, to]);
+  return merged.sort((x, y) => x[0] - y[0]);
 }
 
 /* ------------------------------------------------------------------ SOP */
