@@ -619,10 +619,12 @@ test("every corpus SOP plays on the OPL3", { skip: !have }, () => {
   // opening above the silence floor) and the default gain came down from 0.42
   // to 0.32 to make room for it (which pulled one file back under the panning
   // one). Re-pin them when the level changes; do not widen the tolerance,
-  // because a broken path does not move these by one.
+  // because a broken path does not move these by one. Re-pinned again when the
+  // corpus grew from 336 files to 347 and SOP playback began following NOTE.EXE
+  // (SOP §8): `wide` stayed 61, `panned` went to 184 and `silent` to 66.
   assert.equal(wide, 61, "files whose four-operator instrument reaches four operators");
-  assert.equal(panned, 176, "files whose stereo switches have parted by two seconds");
-  assert.equal(silent, 70, "files with nothing audible in their first two seconds");
+  assert.equal(panned, 184, "files whose stereo switches have parted by two seconds");
+  assert.equal(silent, 66, "files with nothing audible in their first two seconds");
 });
 
 test("a four-operator corpus SOP uses four operators", { skip: !have }, () => {

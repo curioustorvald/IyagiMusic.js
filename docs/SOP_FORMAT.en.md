@@ -67,7 +67,7 @@ block**, reads it back as one, and writes it with a single call
 | 9 | `u8` | padding | always 0 *(measured)* |
 | 10 | `char[13]` | fileName | the name it was saved under — **not always its own**, see below |
 | 23 | `char[31]` | title | NUL-terminated, at most 30 characters; Johab in 80 of 336 files *(measured)* |
-| 54 | `u16` | percussive | 0 = melodic, 1 = rhythm mode; 1 in 295 files, 0 in 41 *(measured)* |
+| 54 | `u16` | percussive | 0 = melodic, 1 = rhythm mode; 1 in 306 files, 0 in 41 *(measured, 347)* |
 | 56 | `u16` | tickBeat | ticks per beat: 8, 12, 16, 4 or 6 *(measured)*; see below |
 | 58 | `u8` | beatMeasure | beats per bar; 4 in 322 of 336 *(measured)* |
 | 59 | `u16` | basicTempo | **always written as 120 and never read** *(NOTE.EXE)*; see below |
@@ -151,11 +151,11 @@ itself realises that clock is §5.
 One byte per track, saying what kind of voice it is. The low seven bits are
 the mode; bit 7 is a separate flag.
 
-| Value | Meaning | Count *(measured)* |
+| Value | Meaning | Count *(measured, 347)* |
 |-------|---------|--------------------|
-| 0 | the upper half of a four-operator pair — see below | 229 |
-| 1 | YMF262 four-operator | 229 |
-| 2 | YM3812 two-operator | 6222 |
+| 0 | the upper half of a four-operator pair — see below | 249 |
+| 1 | YMF262 four-operator | 249 |
+| 2 | YM3812 two-operator | 6402 |
 | bit 7 | **channel disabled in the editor** *(NOTE.EXE)* | 40, all on mode 2 |
 
 **Bit 7 is the editor's "연주 불가능" (do not play) switch.** Alt-F1…F10 and
@@ -200,17 +200,17 @@ name fills it exactly). §3.4 has the set file.
 Note knows more instrument types than the corpus uses. Its loader and saver
 have a record size for exactly these *(NOTE.EXE)*:
 
-| instType | Data | Label | Meaning | Count *(measured)* |
+| instType | Data | Label | Meaning | Count *(measured, 347)* |
 |----------|------|-------|---------|--------------------|
-| 0 | 22 | `4OP` | melody, four-operator (OPL3) | 415 |
-| 1 | 11 | `2OP` | melody, two-operator | 4498 |
+| 0 | 22 | `4OP` | melody, four-operator (OPL3) | 608 |
+| 1 | 11 | `2OP` | melody, two-operator | 4577 |
 | 2 | 11 | `1OP` | melody, loaded exactly like type 1 — see below | 0 |
-| 6 | 11 | `BDR` | bass drum | 1540 |
-| 7 | 11 | `SDR` | snare drum | 489 |
-| 8 | 11 | `TOM` | tom tom | 455 |
-| 9 | 11 | `CYM` | cymbal | 380 |
-| 10 | 11 | `HIH` | hi-hat | 713 |
-| 12 | 0 | `---` | an empty slot — §6 | 11 393 |
+| 6 | 11 | `BDR` | bass drum | 1586 |
+| 7 | 11 | `SDR` | snare drum | 509 |
+| 8 | 11 | `TOM` | tom tom | 462 |
+| 9 | 11 | `CYM` | cymbal | 397 |
+| 10 | 11 | `HIH` | hi-hat | 747 |
+| 12 | 0 | `---` | an empty slot — §6 | 12 030 |
 
 The label is what the instrument box shows between the two names
 *(NOTE.EXE)*. Beyond these, the label table names type **11 `PCM`** and leaves
@@ -294,10 +294,10 @@ The same eleven-byte layout twice: operators 1 and 2, then operators 3 and 4,
 at register offsets 0x08/0x0B and with the second feedback byte at 0xC8.
 
 This pairing is not a reading of the format so much as a fact about the bytes.
-Across all 415 four-operator instruments, bytes 4, 10, 15 and 21 are **always**
-in 0–7 and bytes 5 and 16 **always** in 0–15 *(measured)* — that is, every byte
-the layout calls a wave select really is one, and every byte it calls
-feedback/connection really is one, over 2490 bytes with no exceptions. The
+Across all 608 four-operator instruments, bytes 4, 10, 15 and 21 are **always**
+in 0–7 and bytes 5 and 16 **always** in 0–15 *(measured, 347)* — that is, every
+byte the layout calls a wave select really is one, and every byte it calls
+feedback/connection really is one, over 3648 bytes with no exceptions. The
 layout is correct, and it is how Note loads it: one of four routines chosen by
 the connection bits of bytes 5 and 16 *(NOTE.EXE)*, which decide which of the
 four operators channel volume scales.
@@ -371,14 +371,14 @@ u8  code
 ... value bytes, by code
 ```
 
-| Code | Name | Value | Count *(measured)* | Default *(NOTE.EXE)* |
+| Code | Name | Value | Count *(measured, 347)* | Default *(NOTE.EXE)* |
 |------|------|-------|--------------------|----------------------|
 | 1 | special event | `u8` | **7** — see below | 0 |
-| 2 | note on | `u8` pitch, `u16` length in ticks | 2 076 497 | — |
-| 4 | volume | `u8`, 0–127 *(measured)* | 959 239 | **96** |
-| 5 | pitch | `u8`, 0–200, centre 100 *(measured)* | 1 188 983 | 100 |
-| 6 | instrument | `u8` index into §3 | 334 381 | 0 |
-| 7 | panning | `u8`, 0 = right, 1 = middle, 2 = left | 114 619 | 1 |
+| 2 | note on | `u8` pitch, `u16` length in ticks | 2 162 144 | — |
+| 4 | volume | `u8`, 0–127 *(measured)* | 979 055 | **96** |
+| 5 | pitch | `u8`, 0–200, centre 100 *(measured)* | 1 248 948 | 100 |
+| 6 | instrument | `u8` index into §3 | 346 756 | 0 |
+| 7 | panning | `u8`, 0 = right, 1 = middle, 2 = left | 119 306 | 1 |
 
 No other code occurs *(measured)*. Note keeps events in memory as a list of
 the same deltas, and its reader, meeting a code outside 1–8, reads no value
@@ -446,7 +446,7 @@ pans it again, so in Note on an OPL3 that track **never sounds**.
 drawn and edited as a control lane, 0–255, and the manual says what it is for:
 synchronising something else to the music from another program, "never used
 in ordinary composition". Note's own playback skips it. Seven occurrences in
-2.08 million events, across `AJH.SOP`, `HH-FF6.SOP`, `JAM777.SOP` and
+2.16 million events *(measured, 347)*, across `AJH.SOP`, `HH-FF6.SOP`, `JAM777.SOP` and
 `MIR_BLUE.SOP`, with values 0, 2, 100, 110, 120, 132 and 220 *(measured)*; its
 one-byte size is confirmed both by the code and by the surrounding events
 staying aligned.
@@ -455,10 +455,10 @@ staying aligned.
 
 Same layout as §4.1, but a **disjoint code space**:
 
-| Code | Name | Value | Count *(measured)* | Default *(NOTE.EXE)* |
+| Code | Name | Value | Count *(measured, 347)* | Default *(NOTE.EXE)* |
 |------|------|-------|--------------------|----------------------|
-| 3 | tempo | `u8` bpm, 2–255 *(measured)* | 2769 | 120 |
-| 8 | global volume | `u8`, 0–127 *(measured)* | 14 775 | 127 |
+| 3 | tempo | `u8` bpm, 2–255 *(measured)* | 2851 | 120 |
+| 8 | global volume | `u8`, 0–127 *(measured)* | 15 212 | 127 |
 
 Neither code ever appears in a sequenced track, and no sequenced-track code
 ever appears here *(measured)*. Note's player would honour a global volume on
@@ -498,8 +498,8 @@ holding no instrument *(NOTE.EXE)*. Three things make one:
 and renaming does not raise it *(NOTE.EXE)*. So every slot below it is saved,
 empty or not, and the scene used that: a type-12 record's `longName` holds one
 line of the song's scrolling credits, **19 columns wide**, typed over an empty
-or deleted slot. 11 393 of the corpus's 19 883 instrument records are type 12
-*(measured)* — the credits, and the gaps between instruments, are the bulk of
+or deleted slot. 12 030 of the corpus's 20 916 instrument records are type 12
+*(measured, 347)* — the credits, and the gaps between instruments, are the bulk of
 the table. 130 files end their table with type-12 records, 9142 of them, 1370
 with text *(measured, 347)*.
 
@@ -509,8 +509,8 @@ it can be the name of an instrument that was deleted and never overwritten.
 `shortName` carry the file names of deleted instruments or other stale bytes,
 not text *(measured)*. Read `longName` only.
 
-Unlike `.iss` lyrics, these are almost entirely ASCII — 10 of 11 393 contain a
-byte ≥ 0x80 *(measured)* — which is what a program with no Hangul input would
+Unlike `.iss` lyrics, these are almost entirely ASCII — 14 of 12 030 have a
+byte ≥ 0x80 anywhere in the field *(measured, 347)* — which is what a program with no Hangul input would
 leave. The ones that do are Johab, and `parseSop` decodes them the same way it
 decodes the title.
 
@@ -570,10 +570,10 @@ by another route. Four-operator instruments get both operator pairs (§3.3),
 wave selects 4–7 are the chip's own, and §4.2's panning becomes the 0xC0 stereo
 switches — a SOP is the only thing this library plays that is not mono.
 
-**Only the channel-mode table asks for four operators.** 229 tracks are mode 1
-*(measured)*, and those are the tracks that get a joined pair. Thirty more
-tracks, in files that never mark a mode 1, select a type-0 instrument
-*(measured)*; Note plays those as their first operator pair (§3.3), and so does
+**Only the channel-mode table asks for four operators.** 249 tracks are mode 1
+*(measured, 347)*, and those are the tracks that get a joined pair. Thirty more
+tracks, in seven files, select a type-0 instrument without being mode 1
+*(measured, 347)*; Note plays those as their first operator pair (§3.3), and so does
 this library. Earlier revisions promoted them to four operators. On a mode-1
 track the reverse also follows Note: a two-operator instrument loads into the
 first pair and the second pair keeps whatever it last held, still joined — 1163

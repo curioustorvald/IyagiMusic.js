@@ -335,10 +335,10 @@ test("every corpus SOP parses and ends exactly where the file does",
       comments += s.comments.length;
       fourOp += s.instruments.filter((i) => i.type === 0).length;
     }
-    assert.equal(files.length, 336);
-    assert.equal(events, 4691270);
-    assert.equal(comments, 11393);
-    assert.equal(fourOp, 415);
+    assert.equal(files.length, 347);
+    assert.equal(events, 4874279);
+    assert.equal(comments, 12030);
+    assert.equal(fourOp, 608);
   });
 
 test("the corpus stays inside the documented value ranges", { skip: !have }, () => {
@@ -364,10 +364,10 @@ test("the corpus stays inside the documented value ranges", { skip: !have }, () 
   assert.deepEqual([...seen.instType].sort((a, b) => a - b), [0, 1, 6, 7, 8, 9, 10, 12]);
   assert.deepEqual([...seen.track].sort((a, b) => a - b), [1, 2, 4, 5, 6, 7]);
   assert.deepEqual([...seen.ctrl].sort((a, b) => a - b), [3, 8]);
-  // §2: 0x82 is the undocumented one -- mode 2 with bit 7 set, nothing else.
+  // §2: 0x82 is mode 2 with the editor's disable bit set; nothing else carries it.
   assert.deepEqual([...seen.chanMode].sort((a, b) => a - b), [0, 1, 2, 0x82]);
-  assert.equal(percussive, 295);
-  assert.equal(notes, 2076497);
+  assert.equal(percussive, 306);
+  assert.equal(notes, 2162144);
   assert.equal(minNote, 12);
   assert.equal(maxNote, 113);
   assert.equal(maxVolume, 127, "volume is 7-bit, like the driver's");

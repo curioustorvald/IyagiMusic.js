@@ -181,6 +181,21 @@ corpus file (`HB-NOTGO.IMS`) has 838 bytes of extra event data after its patch
 table. Parse the table at `70 + dataSize` and stop; do not assume the file
 ends there.
 
+**Some files are damaged, and the counts are how to tell.** The corpus has
+since grown to 1725 `.ims`, and four of them carry bytes no converter wrote
+*(measured, 1725)*. `AUTUMN.IMS`, `MANDOL.IMS` and `SPRING.IMS`, which share a
+1995-08-22 date, run sound for about a thousand events and then turn into
+junk: status bytes like `FF`, data bytes with bit 7 set, delays out of any
+grid — and the last two stop without an `FC`. `BT-REDMO.IMS` has a single bad
+byte, a pitch-bend high byte of `0x9A`, and its `nrCommand` is off by exactly
+one. A player should survive all four, and a measurement should leave them out:
+§1.4's `FC`-is-last and 7-bit-bend claims hold for every other file.
+Damage shows as a status byte above `F0` other than `FC`, a data byte of 0x80
+or more, or a stream that does not end in `FC`. `nrCommand` is not the test,
+and the exactness claimed for it above did not survive the larger corpus: it
+also disagrees in three files whose streams are otherwise sound — by 18 in
+`BALO.IMS`, 17 in `GUIL.IMS` and 3072 in `BRANDEN.IMS`.
+
 ### 1.6 Patch table
 
 At offset `70 + dataSize`:
@@ -431,6 +446,19 @@ ignore it entirely.
 > anywhere in that song's title *(measured)*, even though IMS titles routinely
 > carry the artist. Do not present these as authorship. The song's own title
 > field is the only attribution these files actually carry.
+>
+> The corpus has since grown to 1031 `.iss`, and the newcomers add three
+> things *(measured, 1031)*. Five files of 1992–93 spell one phrase across the
+> four fields — `This` / `is song` / `text` / `for IMP` — which is an older
+> tool's default and is hidden the same way. Four files keep a picture's file
+> name in the header: it starts at byte 26, inside `reserved`, and runs on
+> into `writer`, which is why `writer` reads `G1.PCX`, `MOON.PCX`, `IRL.PCX`
+> or `OVE.PCX` — the whole names are `XWING1.PCX`, `LEE_MOON.PCX`,
+> `AIRGIRL.PCX` and `NO_LOVE.PCX`. And `GOODDAY.ISS` has lyric text where
+> `headStr` and the credits should be. IMPLAY plays it, so it is this
+> section's description of the header, not the file, that falls short there;
+> 163 files leave `headStr` blank, and the older header is not yet written
+> down.
 
 ### 4.2 Highlight records — `recCount` * 5 bytes
 

@@ -8,6 +8,7 @@ import {
   IyagiMusic, parseIms, parseBnk, parseIss, deltaGcd, identify, resolveIssSpans,
   METER_STRIDE, M_PEAK, M_VOLUME,
 } from "../src/player.js";
+import { imsEvents } from "../src/formats.js";
 
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
 // The bulk of the corpus lives in one subdirectory. Its name has changed once
@@ -38,6 +39,16 @@ test("the delta-time GCD agrees with the header's srcTickBeat", { skip: !have },
     if (!fn.toUpperCase().endsWith(".IMS")) continue;
     const song = parseIms(new Uint8Array(fs.readFileSync(path.join(root, fn))));
     if (!song.srcTickBeat) continue;
+    // FILE_FORMATS §1.5: a few files are damaged part-way through their
+    // stream -- a status byte no IMS carries, a data byte with bit 7 set, or
+    // no FC at the end. The rule is about what a converter wrote, so a file
+    // whose bytes are no longer what it wrote is not evidence either way.
+    // AUTUMN.IMS's intact first thousand events do obey it.
+    const ev = [...imsEvents(song)];
+    const damaged = !ev.length || ev.at(-1).status !== 0xfc ||
+      ev.some((e) => (e.status > 0xf0 && e.status !== 0xfc) ||
+        (e.status < 0xf0 && (e.a > 127 || e.b > 127)));
+    if (damaged) continue;
     assert.equal(deltaGcd(song), 240 / song.srcTickBeat, fn);
     checked++;
   }
@@ -80,7 +91,7 @@ test("every corpus bank parses and every patch name resolves", { skip: !have }, 
     }
     songs++;
   }
-  assert.equal(songs, 1366);
+  assert.equal(songs, 1725);
   assert.ok(missing / refs < 0.001, `${missing} of ${refs} patch names unresolved`);
 });
 
@@ -95,13 +106,23 @@ test("ISS credit fields are tool defaults, not credits", { skip: !have }, () => 
     const iss = parseIss(new Uint8Array(fs.readFileSync(path.join(root, fn))));
     if (!iss) continue;
     files++;
-    for (const k of Object.keys(seen)) if (iss[k].trim()) seen[k].add(iss[k].trim());
+    // FILE_FORMATS §4.1: GOODDAY.ISS carries lyric text where the header
+    // should be. IMPLAY reads it, so the header description is what is
+    // incomplete there, and until it is, its "fields" are not fields.
+    if (fn.toUpperCase() === "GOODDAY.ISS") continue;
+    for (const k of Object.keys(seen)) {
+      const v = iss[k].trim();
+      // §4.1: a picture's file name sits in the writer field of a few old files.
+      if (v && !(k === "writer" && /\.PCX$/i.test(v))) seen[k].add(v);
+    }
   }
-  assert.equal(files, 684);
-  assert.deepEqual([...seen.composer].sort(), ["COMPOSER", "Solgher"]);
-  assert.deepEqual([...seen.singer].sort(), ["Damul", "SINGER"]);
-  assert.deepEqual([...seen.editor].sort(), ["EDITOR", "Salmosa"]);
-  assert.deepEqual([...seen.writer].sort(), ["KimTH", "LeeYS", "MunBK", "WRITER"]);
+  assert.equal(files, 1031);
+  // §4.1: "This / is song / text / for IMP" is an older tool's default, one
+  // phrase spread over the four fields.
+  assert.deepEqual([...seen.composer].sort(), ["COMPOSER", "Solgher", "is song"]);
+  assert.deepEqual([...seen.singer].sort(), ["Damul", "SINGER", "text"]);
+  assert.deepEqual([...seen.editor].sort(), ["EDITOR", "Salmosa", "for IMP"]);
+  assert.deepEqual([...seen.writer].sort(), ["KimTH", "LeeYS", "MunBK", "This", "WRITER"]);
 });
 
 test("an ISS cue is the right edge of the highlight, not an isolated run", { skip: !have }, () => {
