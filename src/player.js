@@ -10,7 +10,7 @@ import {
   parseIms, parseRol, parseBnk, parseIss, parseSop, resolvePatches,
   identify, deltaGcd, resolveIssSpans,
 } from "./formats.js";
-import { Sequencer, imsSequence, rolSequence, sopSequence } from "./sequencer.js";
+import { Sequencer, imsSequence, rolSequence, sopSequence, sopTempo } from "./sequencer.js";
 
 export { OPL2, OPL3, NATIVE_RATE, parseIms, parseRol, parseBnk, parseIss, identify, deltaGcd };
 export { parseSop, sopPatch } from "./formats.js";
@@ -113,9 +113,11 @@ export class IyagiMusic {
         events: sopSequence(this.song,
           voiceLayout(this.chipKind === "opl3", this.song.percussive)),
         tickBeat: this.song.tickBeat,
-        tempo: this.song.basicTempo || 120,   // SOP §1: one corpus file says 0
+        // SOP §1, §5: Note starts every song at 120 and never reads
+        // basicTempo; the timer makes that 120.04.
+        tempo: sopTempo(120, this.song.tickBeat),
         percussive: this.song.percussive,
-        pitchRange: 1,                        // SOP §4.2: pitch 0..200 is ±1 semitone
+        sop: true,                            // SOP §8.1: play it as NOTE.EXE does
         patches: [],
       });
     } else {

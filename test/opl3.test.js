@@ -603,7 +603,7 @@ test("every corpus SOP plays on the OPL3", { skip: !have }, () => {
     // Off the plan rather than off the registers: which tracks get a
     // four-operator voice is decided once, before a sample is rendered, so
     // this does not depend on how far into the song the test got.
-    if (m.sequencer.makeEvents.some((e) => e.type === PATCH && e.patch && e.patch.pair)) wide++;
+    if (m.sequencer.makeEvents.some((e) => e.type === PATCH && e.wide && e.patch && e.patch.pair)) wide++;
     if (rms(L) < 0.002 && rms(R) < 0.002) silent++;
   }
   // The corpus's own numbers, pinned so that a regression shows as one. They

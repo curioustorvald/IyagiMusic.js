@@ -41,3 +41,35 @@ export const FNUM_TABLE = new Uint16Array([
 /** Semitones per table octave, and sixteenths per semitone. */
 export const SEMITONES = 12;
 export const SUBSTEPS = 16;
+
+/** SOP §4.2: Note's bend resolution, in steps per semitone. */
+export const SOP_PITCH_STEPS = 25;
+
+/**
+ * The F-number table Note plays a `.sop` with: 25 rows of one octave each,
+ * row `r` sounding `r` twenty-fifths of a semitone sharp, twelve semitones to
+ * a row. Entry `r*12 + s` is row `r`, semitone `s`; row 0 semitone 0 is 343,
+ * middle C at block 4. SOP §4.2.
+ *
+ * It is not an equal-tempered table and is not meant to be one. It is the
+ * integer recipe of the Ad Lib driver, run at 25 steps: the row's C is
+ * `(1 + 0.06 r / 25)` times a base worked out in fixed point, and each
+ * semitone after it is the previous one times 106/100, truncated -- so its
+ * semitones are about 1.06 wide, a little under a cent more than equal
+ * temperament, and wobble by a few cents where the truncation falls. Computed
+ * here, not carried: the recipe reproduces all 300 entries of the table inside
+ * NOTE.EXE exactly, and that match is the whole of the case for using it.
+ */
+export const SOP_FNUM_TABLE = (() => {
+  const table = new Uint16Array(SOP_PITCH_STEPS * SEMITONES);
+  for (let r = 0; r < SOP_PITCH_STEPS; r++) {
+    const d100 = SOP_PITCH_STEPS * 100;
+    const f8 = Math.floor(((d100 + 6 * r) * 26044 * 2) / (d100 * 25));
+    let v = Math.floor((f8 * 16384 * 9) / (179 * 625));
+    for (let s = 0; s < SEMITONES; s++) {
+      table[r * SEMITONES + s] = (v + 4) >> 3;
+      v = Math.floor((v * 106) / 100);
+    }
+  }
+  return table;
+})();

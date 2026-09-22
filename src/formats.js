@@ -16,8 +16,14 @@ const ISS_LINE_SIZE = 64;
 const SOP_HEADER_SIZE = 76;
 /** SOP §3.1: instType byte, then char[8] shortName and char[19] longName. */
 const SOP_INST_NAME_SIZE = 28;
-/** SOP §3.1: packed register bytes per instType. Anything else is a parse error. */
-const SOP_INST_DATA_SIZE = { 0: 22, 1: 11, 6: 11, 7: 11, 8: 11, 9: 11, 10: 11, 12: 0 };
+/**
+ * SOP §3.1: packed register bytes per instType. These are exactly the types
+ * NOTE.EXE's own reader and writer have a size for; type 2 is on the list
+ * although no corpus file uses it, because the editor round-trips it. Anything
+ * else is a parse error -- Note itself would read no data bytes for it and
+ * lose its place in the file.
+ */
+const SOP_INST_DATA_SIZE = { 0: 22, 1: 11, 2: 11, 6: 11, 7: 11, 8: 11, 9: 11, 10: 11, 12: 0 };
 /** SOP §4.2: value bytes following the event code, in a sequenced track. */
 const SOP_TRACK_VALUE_SIZE = { 1: 1, 2: 3, 4: 1, 5: 1, 6: 1, 7: 1 };
 /** SOP §5: the control track has its own, disjoint, code space. */
@@ -585,8 +591,9 @@ export function parseSop(data, options) {
     tickBeat: b[56],
     beatMeasure: b[58],
     basicTempo: b[59],
-    // Bytes 60..72 are a comment field the editor never wrote to; SOP §1 --
-    // 110 corpus files leave uninitialised stack in it, so it is not exposed.
+    // Bytes 61..72 are never written by the editor; SOP §1 -- they are
+    // whatever its uncleared header buffer held, inherited from the last SOP
+    // it loaded, so they are not exposed. Byte 60 is basicTempo's high byte.
     instruments: [],
     tracks: [],
     control: [],
@@ -652,7 +659,7 @@ export function parseSop(data, options) {
 
   for (let t = 0; t < nTracks; t++) {
     song.tracks.push({
-      mode: modes[t] & 0x7f,      // §2: bit 7 is undocumented and carries no events
+      mode: modes[t] & 0x7f,      // §2: bit 7 is the editor's channel-disable switch, view state
       modeRaw: modes[t],
       events: readTrack(SOP_TRACK_VALUE_SIZE, `track ${t}`),
     });
@@ -685,13 +692,15 @@ function sopOperator(char, scale, attackDecay, sustainRelease, feedback) {
 /**
  * One eleven-byte operator pair, as a Patch. SOP §3.2.
  *
- * `singleOp` is the rhythm-voice reading: types 7..10 are one operator, and in
- * those everything from the feedback byte on is uninitialised -- 81% of corpus
- * hi-hats put something out of range in it. Those bytes are zeroed rather than
- * passed on; the driver never reads them back for a rhythm voice anyway.
+ * `singleOp` is the rhythm-voice reading: types 7..10 are one operator, and
+ * bytes 6..10 are never used for them, so the carrier is zeroed. Byte 5 is
+ * kept: NOTE.EXE writes its low nibble to 0xC7 on the hi-hat track and 0xC8 on
+ * the tom track (SOP §3.2), and the operator fields below read only those four
+ * bits of it. The driver writes 0xC0 for exactly those two drums, because they
+ * are the modulator slots of their channels.
  */
 function sopPair(name, d, at, singleOp) {
-  const feedback = singleOp ? 0 : d[at + 5];
+  const feedback = d[at + 5];
   return {
     name,
     modulator: sopOperator(d[at], d[at + 1], d[at + 2], d[at + 3], feedback),

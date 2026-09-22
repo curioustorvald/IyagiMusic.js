@@ -11,7 +11,9 @@
 // below is the OPL2's table with a second copy appended. What is genuinely new
 // is in §10 and §11 -- four-operator voices and the stereo switches.
 
-import { FNUM_TABLE, SEMITONES, SUBSTEPS } from "./fnum-table.js";
+import {
+  FNUM_TABLE, SEMITONES, SUBSTEPS, SOP_FNUM_TABLE, SOP_PITCH_STEPS,
+} from "./fnum-table.js";
 import {
   CHANNEL_COUNT, OPL3_CHANNEL_COUNT, BANK_STRIDE, REG_FOUROP, REG_OPL3_ENABLE,
   OPL3_NEW, FOUROP_PAIRS, PAN_CENTRE, PAN_SHIFT, RHYTHM_VOICES,
@@ -199,11 +201,17 @@ export class AdlibDriver {
    * @param {boolean} [options.opl3] drive a YMF262: two banks, eighteen
    *   channels, four-operator voices and stereo. Default false, which is a
    *   YM3812 and is what `.ims` and `.rol` want.
+   * @param {boolean} [options.sop] behave as NOTE.EXE's driver does for a
+   *   `.sop` (SOP §8.1): bends are SOP pitch values 0..200 on Note's own
+   *   F-number table, a joined channel pair stays joined when it is given a
+   *   two-operator patch, and a corrupt pan value corrupts 0xC0. Default false.
    */
   constructor(chip, options = {}) {
     this.chip = chip;
     /** @type {boolean} */
     this.opl3 = !!options.opl3;
+    /** @type {boolean} */
+    this.sop = !!options.sop;
     const layout = chipLayout(this.opl3);
     this.banks = layout.banks;
     this.channelCount = layout.channelCount;
@@ -249,6 +257,16 @@ export class AdlibDriver {
     this.voiceVolume = new Int32Array(this.channelCount + RHYTHM_VOICES).fill(MAX_VOLUME);
     /** @type {Int32Array} 1 where a voice is currently four operators wide */
     this.voiceFourOp = new Int32Array(this.channelCount + RHYTHM_VOICES);
+    /**
+     * SOP mode: 1 where a voice is a joined pair carrying a two-operator
+     * patch. Note loads such a patch into the first pair and leaves the
+     * second as it was, still joined (SOP §3.3); from then on only the first
+     * pair is the voice's for loading, volume and panning.
+     * @type {Int32Array}
+     */
+    this.voiceHalf = new Int32Array(this.channelCount + RHYTHM_VOICES);
+    /** @type {Int32Array} SOP mode: each voice's pitch, 0..200 about 100 */
+    this.voiceSopPitch = new Int32Array(this.channelCount + RHYTHM_VOICES).fill(100);
     /** @type {number} */
     this.percBits = 0;
     /** @type {boolean} */
@@ -274,6 +292,12 @@ export class AdlibDriver {
     // that never thinks about panning sound the same on both chips.
     this.channelPan = new Int32Array(this.channelCount).fill(PAN_CENTRE);
     this.channelC0 = new Int32Array(this.channelCount);
+    /**
+     * SOP mode: feedback/connection bits a corrupt pan value has ORed into
+     * 0xC0, which stay until the channel's next patch. SOP §4.2.
+     * @type {Int32Array}
+     */
+    this.channelC0Or = new Int32Array(this.channelCount);
     if (this.opl3) for (let c = 0; c < this.channelCount; c++) this.#writeC0(c);
 
     this.setMode(false);
@@ -351,16 +375,31 @@ export class AdlibDriver {
    * alone where it cannot -- which is the whole of the OPL2 degradation, in
    * one branch.
    *
+   * In SOP mode the patch does not decide the join; `join` does, when it is
+   * given, and otherwise the pair stays as it is. A four-operator patch on a
+   * voice that is not joined loads its first pair, and a two-operator patch
+   * on one that is loads the first pair and leaves the second alone -- both as
+   * NOTE.EXE does (SOP §3.3).
+   *
    * @param {number} voice @param {import("./formats.js").Patch} patch
+   * @param {boolean} [join] SOP mode: whether the voice's channel pair is joined
    */
-  setVoiceTimbre(voice, patch) {
+  setVoiceTimbre(voice, patch, join) {
     if (voice >= this.voiceCount) return;
     const map = this.#map();
     const pairIndex = map.four.index[voice];
-    const four = pairIndex >= 0 && !!patch.pair;
-    // Joining or splitting the pair before loading it: the chip reads four
-    // operators as one voice only while 0x104 says so.
-    if (pairIndex >= 0) this.#setFourOp(pairIndex, voice, four);
+    let four;
+    if (this.sop) {
+      if (pairIndex >= 0 && join !== undefined) this.#setFourOp(pairIndex, voice, !!join);
+      const joined = pairIndex >= 0 && !!this.voiceFourOp[voice];
+      four = joined && !!patch.pair;
+      this.voiceHalf[voice] = joined && !patch.pair ? 1 : 0;
+    } else {
+      four = pairIndex >= 0 && !!patch.pair;
+      // Joining or splitting the pair before loading it: the chip reads four
+      // operators as one voice only while 0x104 says so.
+      if (pairIndex >= 0) this.#setFourOp(pairIndex, voice, four);
+    }
 
     const slots = this.#slotsOf(voice);
     this.#setSlot(slots[0], operatorParams(patch.modulator), patch.modWave);
@@ -395,20 +434,29 @@ export class AdlibDriver {
    * §11. Route a voice to the left output, the right, both or neither, as the
    * PAN_* values. An OPL2 has one output and ignores this.
    *
+   * `garble` is SOP mode's: the low nibble of a pan value Note did not
+   * recognise, which it ORs into the channel's feedback and connection bits
+   * until the next patch (SOP §4.2). It reaches an OPL2 too, which has no
+   * stereo switches but does have feedback.
+   *
    * @param {number} voice @param {number} pan PAN_NONE…PAN_CENTRE
+   * @param {number} [garble] SOP mode: bits to OR into 0xC0's low nibble
    */
-  setVoicePan(voice, pan) {
-    if (!this.opl3 || voice >= this.voiceCount) return;
+  setVoicePan(voice, pan, garble = 0) {
+    if (voice >= this.voiceCount || (!this.opl3 && !garble)) return;
     const map = this.#map();
     const value = pan & 3;
     // A four-operator voice is two channels, and which of the two carries the
-    // output is not worth depending on: both get the same switches.
-    const voices = map.four.index[voice] >= 0 && this.voiceFourOp[voice]
+    // output is not worth depending on: both get the same switches. Note,
+    // though, pans only the first channel of a pair it has loaded a
+    // two-operator patch into, so SOP mode does too.
+    const voices = map.four.index[voice] >= 0 && this.voiceFourOp[voice] && !this.voiceHalf[voice]
       ? [voice, map.four.partner[voice]] : [voice];
     for (const v of voices) {
       const channel = map.channel[v];
-      if (this.channelPan[channel] === value) continue;
+      if (this.channelPan[channel] === value && !garble) continue;
       this.channelPan[channel] = value;
+      this.channelC0Or[channel] |= garble & 0x0f;
       this.#writeC0(channel);
     }
   }
@@ -417,6 +465,15 @@ export class AdlibDriver {
    * @param {number} voice @param {number} bend 14-bit, 0x2000 centred
    */
   setVoicePitch(voice, bend) {
+    if (this.sop) {
+      // SOP §4.2: `bend` is the file's 0..200. Note clamps it at the top and
+      // ignores it on every rhythm voice but the bass drum.
+      if (this.#isMelodic(voice) || voice === this.bd) {
+        this.voiceSopPitch[voice] = Math.min(200, Math.max(0, bend | 0));
+        this.#updateFNums(voice);
+      }
+      return;
+    }
     if (this.#isMelodic(voice) || voice === this.bd) {
       this.voiceBend[voice] = Math.min(0x3fff, Math.max(0, bend | 0));
       this.#updateFNums(voice);
@@ -482,7 +539,7 @@ export class AdlibDriver {
   /** Every operator slot a voice occupies: two, four, or -- a drum -- one. */
   #allSlotsOf(voice) {
     const slots = this.#slotsOf(voice).filter((s) => s !== 255);
-    if (!this.voiceFourOp[voice]) return slots;
+    if (!this.voiceFourOp[voice] || this.voiceHalf[voice]) return slots;
     return slots.concat(this.#map().slots[this.#map().four.partner[voice]]);
   }
 
@@ -494,6 +551,7 @@ export class AdlibDriver {
     const wanted = on ? (this.fourOpBits | bit) : (this.fourOpBits & ~bit);
     this.voiceFourOp[voice] = on ? 1 : 0;
     this.voiceFourOp[partner] = 0;              // the slave is never a voice itself
+    if (!on) this.voiceHalf[voice] = 0;
     if (wanted === this.fourOpBits) return;
     this.fourOpBits = wanted;
     this.chip.write(REG_FOUROP, this.fourOpBits);
@@ -558,7 +616,7 @@ export class AdlibDriver {
 
   /** Where a slot sits in its voice's four-operator chain, if it is in one. */
   #chainPosition(slot, voice) {
-    if (voice < 0 || !this.voiceFourOp[voice]) return NOT_FOUR;
+    if (voice < 0 || !this.voiceFourOp[voice] || this.voiceHalf[voice]) return NOT_FOUR;
     const map = this.#map();
     const head = this.#slotsOf(voice);
     const slave = this.#slotsOf(map.four.partner[voice]);
@@ -585,13 +643,14 @@ export class AdlibDriver {
     const p = this.slotParams[slot];
     const channel = this.slotChannel[slot];
     this.channelC0[channel] = ((p[P_FEEDBACK] & 7) << 1) | (p[P_CONNECTION] ? 0 : 1);
+    this.channelC0Or[channel] = 0;              // a new patch clears a bad pan's damage
     this.#writeC0(channel);
   }
 
   /** §11. One channel's 0xC0: feedback and connection, plus the stereo bits. */
   #writeC0(channel) {
     const pan = this.opl3 ? (this.channelPan[channel] & 3) << PAN_SHIFT : 0;
-    this.#writeChannel(0xc0, channel, this.channelC0[channel] | pan);
+    this.#writeChannel(0xc0, channel, this.channelC0[channel] | this.channelC0Or[channel] | pan);
   }
 
   #sendAttackDecay(slot) {
@@ -644,6 +703,7 @@ export class AdlibDriver {
   }
 
   #setFreq(voice, note, bend, keyOn) {
+    if (this.sop) return this.#setFreqSop(voice, note, keyOn);
     const bendOffset = ((bend - MID_PITCH) >> 5) * this.pitchRange;
     let t = (note << 8) + bendOffset;
     t = (t + 8) >> 4;
@@ -657,6 +717,35 @@ export class AdlibDriver {
     if (entry & 0x8000) block++;
     if (block < 0) { block++; entry >>= 1; }
     const fnum = entry & 0x3ff;
+
+    const map = this.#map();
+    const bx = keyOn | ((block & 7) << 2) | ((fnum >> 8) & 3);
+    const channels = this.voiceFourOp[voice]
+      ? [map.channel[voice], map.channel[map.four.partner[voice]]]
+      : [map.channel[voice]];
+    for (const channel of channels) {
+      this.#writeChannel(0xa0, channel, fnum & 0xff);
+      this.#writeChannel(0xb0, channel, bx);
+    }
+    return bx;
+  }
+
+  /**
+   * SOP §4.2: NOTE.EXE's own frequency routine. The pitch, shifted right by
+   * two, picks a semitone either way and one of 25 rows of Note's table;
+   * the note, plus that semitone, is clamped to the chip's eight octaves.
+   */
+  #setFreqSop(voice, note, keyOn) {
+    const t = this.voiceSopPitch[voice] >> 2;
+    let semitone = 0;
+    let row = t - SOP_PITCH_STEPS;
+    if (row < 0) { semitone = -1; row = t; } else if (row >= SOP_PITCH_STEPS) {
+      semitone = 1; row -= SOP_PITCH_STEPS;
+    }
+    let n = note + semitone;
+    if (n < 0) n = 0; else if (n > CHIP_NOTES - 1) n = CHIP_NOTES - 1;
+    const fnum = SOP_FNUM_TABLE[row * SEMITONES + (n % SEMITONES)];
+    const block = (n / SEMITONES) | 0;
 
     const map = this.#map();
     const bx = keyOn | ((block & 7) << 2) | ((fnum >> 8) & 3);

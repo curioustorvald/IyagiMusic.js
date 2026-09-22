@@ -7,8 +7,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { IyagiMusic, parseSop, sopPatch, identify } from "../src/player.js";
-import { sopSequence, NOTE_ON, NOTE_OFF, PATCH } from "../src/sequencer.js";
+import { sopSequence, sopTempo, NOTE_ON, NOTE_OFF, PATCH, PAN, VOLUME } from "../src/sequencer.js";
+import { PAN_NONE } from "../src/opl/constants.js";
 import { FormatError } from "../src/formats.js";
+import { AdlibDriver } from "../src/driver.js";
 
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
 const MEGA = path.join(CORPUS, "IMS_FILE_MEGA_CORPUS");
@@ -102,6 +104,18 @@ test("a hand-built SOP reads back field for field", () => {
   assert.deepEqual(song.control.map((e) => [e.tick, e.code, e.value]), [[0, 8, 127], [16, 3, 140]]);
 });
 
+test("instType 2 is an eleven-byte record, as NOTE.EXE writes it", () => {
+  // SOP §3.1: the editor labels type 2 "1OP" and loads it with the same
+  // routine as type 1. No corpus file carries one, so it is built here.
+  const oneOp = { ...MELODY, type: 2, shortName: "ONEOP" };
+  const song = parseSop(buildSop({ instruments: [oneOp, MELODY] }));
+  assert.deepEqual(song.instruments.map((i) => i.type), [2, 1]);
+  assert.equal(song.instruments[1].shortName, "PIANO");
+  const a = sopPatch(song.instruments[0]);
+  const b = sopPatch(song.instruments[1]);
+  assert.deepEqual({ ...a, name: "" }, { ...b, name: "" });
+});
+
 test("the reader refuses what it cannot account for", () => {
   assert.throws(() => parseSop(new Uint8Array(76)), FormatError);
   const bad = buildSop({ instruments: [{ type: 5, data: [] }] });
@@ -132,32 +146,90 @@ test("instrument bytes unpack into the register fields they name", () => {
   assert.equal(sopPatch(c.instruments[0]), null);
 });
 
-test("a single-operator rhythm instrument drops its uninitialised half", () => {
-  // §3.2: for types 7..10 everything from the feedback byte on is stack junk.
+test("a single-operator rhythm instrument keeps its modulator and feedback nibble", () => {
+  // §3.2: for types 7..10 bytes 6..10 are never used, but NOTE.EXE writes byte
+  // 5's low nibble to 0xC7/0xC8 for the hi-hat and tom -- and only the low
+  // nibble, so the 0x90 of junk above it must not matter.
   const junk = { type: 10, shortName: "HH", data: [1, 0, 0xf8, 0xca, 2, 0x9f, 0x6f, 0x73, 0x69, 0x6e, 0x67] };
   const p = sopPatch(parseSop(buildSop({ instruments: [junk] })).instruments[0]);
   assert.equal(p.modulator.multiple, 1);
   assert.equal(p.modWave, 2);
-  assert.equal(p.modulator.feedback, 0, "feedback byte 0x9f must not reach the chip");
+  assert.equal(p.modulator.feedback, 7);
+  assert.equal(p.modulator.connection, 0);
   assert.equal(p.carWave, 0);
   assert.deepEqual(new Set(Object.values(p.carrier)), new Set([0, 1]));
 });
 
-test("repeated hits on one drum do not cut each other off", () => {
-  // Four bass-drum hits a tick apart, each eight ticks long: without pulling
-  // each note-off back to the next hit, the first one's off lands mid-way
-  // through the fourth and silences it.
+test("an overlapping drum hit is not struck again", () => {
+  // §4.2: four bass-drum hits a tick apart, each eight ticks long. In Note the
+  // drum's bit is already set when the second arrives, so the first is the
+  // only strike and the drum lets go when the last note ends.
   const tracks = new Array(N_TRACKS).fill(null).map(() => []);
   tracks[6] = [{ delta: 0, code: 6, value: 0 }];
   for (let i = 0; i < 4; i++) tracks[6].push({ delta: 1, code: 2, value: 36, length: 8 });
   const seq = sopSequence(parseSop(buildSop({
     percussive: 1, instruments: [{ ...MELODY, type: 6 }], tracks,
   })));
-  let on = 0;
-  for (const e of seq) {
-    if (e.type === NOTE_ON) { assert.equal(on, 0, `bass drum keyed at tick ${e.tick} while held`); on = 1; }
-    if (e.type === NOTE_OFF) on = 0;
-  }
+  const ons = seq.filter((e) => e.type === NOTE_ON);
+  assert.deepEqual(ons.map((e) => e.legato), [false, true, true, true]);
+  assert.deepEqual(seq.filter((e) => e.type === NOTE_OFF).map((e) => e.tick), [12]);
+});
+
+test("an overlapping note slurs and a touching one is struck", () => {
+  const tracks = new Array(N_TRACKS).fill(null).map(() => []);
+  tracks[0] = [
+    { delta: 0, code: 6, value: 0 },
+    { delta: 0, code: 2, value: 60, length: 8 },
+    { delta: 4, code: 2, value: 62, length: 8 },    // starts inside the first
+    { delta: 8, code: 2, value: 64, length: 4 },    // starts where the second ends
+  ];
+  const seq = sopSequence(parseSop(buildSop({ percussive: 0, instruments: [MELODY], tracks })));
+  assert.deepEqual(seq.filter((e) => e.type === NOTE_ON).map((e) => [e.tick, e.legato]),
+    [[0, false], [4, true], [12, false]]);
+  assert.deepEqual(seq.filter((e) => e.type === NOTE_OFF).map((e) => e.tick), [12, 16]);
+});
+
+test("the sequence follows NOTE.EXE's defaults and its choice of tracks", () => {
+  const tracks = new Array(N_TRACKS).fill(null).map(() => []);
+  tracks[0] = [{ delta: 0, code: 6, value: 1 }, { delta: 0, code: 2, value: 60, length: 4 }];
+  tracks[3] = [{ delta: 0, code: 6, value: 1 }, { delta: 0, code: 2, value: 64, length: 4 }];
+  tracks[1] = [{ delta: 0, code: 6, value: 1 }, { delta: 0, code: 6, value: 0 },
+    { delta: 0, code: 2, value: 67, length: 4 }];
+  const chanMode = new Array(N_TRACKS).fill(2);
+  chanMode[0] = 1; chanMode[3] = 0;              // track 3 is track 0's upper half
+  const song = parseSop(buildSop({
+    percussive: 0, chanMode, tracks,
+    instruments: [{ type: 12, longName: "credits" }, { ...MELODY, type: 0, data: [...MELODY.data, ...MELODY.data] }],
+  }));
+  const seq = sopSequence(song, { melodicVoices: 18, rhythmBase: 18, fourOpPairs: [[0, 3], [1, 4]] });
+  // §2: mode 0 is not played.
+  assert.deepEqual(seq.filter((e) => e.type === NOTE_ON).map((e) => e.note).sort(), [60, 67]);
+  // §4.2: 96 before any volume event.
+  assert.ok(seq.filter((e) => e.type === VOLUME).every((e) => e.volume === 96));
+  // §2, §3.3: only the mode-1 track's pair is joined; the other track's
+  // four-operator instrument goes to a voice that is not. Selecting the empty
+  // slot 0 changed nothing.
+  const patches = seq.filter((e) => e.type === PATCH);
+  assert.deepEqual(patches.map((e) => e.wide), [true, false]);
+  assert.ok(patches.every((e) => e.patch.pair));
+});
+
+test("a corrupt pan value silences the channel and damages its feedback", () => {
+  const tracks = new Array(N_TRACKS).fill(null).map(() => []);
+  tracks[0] = [{ delta: 0, code: 6, value: 0 }, { delta: 0, code: 7, value: 9 },
+    { delta: 0, code: 2, value: 60, length: 4 }];
+  const seq = sopSequence(parseSop(buildSop({ percussive: 0, instruments: [MELODY], tracks })));
+  const pan = seq.find((e) => e.type === PAN);
+  assert.equal(pan.pan, PAN_NONE);
+  assert.equal(pan.garble, 9);
+});
+
+test("Note's timer is where SOP tempo comes from", () => {
+  // §5: 120 bpm is a divisor of 2485 on a 1.193182 MHz timer.
+  assert.ok(Math.abs(sopTempo(120, 8) - 120.0383) < 1e-3);
+  // Under 19 Hz the timer stays at 18.2 Hz: tempos 2..4 all play alike.
+  assert.equal(sopTempo(2, 8), sopTempo(4, 8));
+  assert.ok(Math.abs(sopTempo(4, 8) - 4.5516) < 1e-3);
 });
 
 test("a track that never selects an instrument still sounds", () => {
@@ -194,10 +266,54 @@ test("the sequencer keeps every note inside the chip's voices", () => {
   const held = new Set();
   for (const e of seq) {
     if (e.type === NOTE_ON) {
-      assert.ok(!held.has(e.voice), `voice ${e.voice} keyed twice at tick ${e.tick}`);
+      assert.ok(!held.has(e.voice) || e.legato, `voice ${e.voice} keyed twice at tick ${e.tick}`);
       held.add(e.voice);
     } else if (e.type === NOTE_OFF) held.delete(e.voice);
   }
+});
+
+test("in SOP mode the driver writes what NOTE.EXE writes", () => {
+  const writes = [];
+  const chip = { opl3: true, write: (reg, value) => writes.push([reg, value]) };
+  const d = new AdlibDriver(chip, { opl3: true, sop: true });
+  const two = sopPatch(parseSop(buildSop({ instruments: [MELODY] })).instruments[0]);
+  const four = { ...two, pair: two };
+  const last = (reg) => writes.filter(([r]) => r === reg).at(-1)?.[1];
+
+  // §4.2: MIDI 60 is Note's row 0, F-number 343, block 4 -- and a pitch that is
+  // not a multiple of four plays as the one below it.
+  d.setVoiceTimbre(0, two, false);
+  d.noteOn(0, 60);
+  assert.equal(last(0xa0), 343 & 0xff);
+  assert.equal(last(0xb0), 0x20 | (4 << 2) | (343 >> 8));
+  d.setVoicePitch(0, 103);
+  assert.equal(last(0xa0), 343 & 0xff);
+  d.setVoicePitch(0, 0);                           // a semitone down: B, block 3
+  assert.equal(last(0xb0) & 0x1c, 3 << 2);
+
+  // §3.3: a two-operator patch on a joined pair leaves the pair joined and the
+  // second half's operators untouched.
+  const [head] = d.fourOpPairs[0];
+  d.setVoiceTimbre(head, four, true);
+  assert.ok(last(0x104) & 1);
+  writes.length = 0;
+  d.setVoiceTimbre(head, two, true);
+  assert.equal(last(0x104), undefined, "the pair was split or rejoined");
+  assert.ok(d.voiceFourOp[head] && d.voiceHalf[head]);
+  const touched = new Set(writes.map(([r]) => r & 0xff));
+  for (const reg of [0x28, 0x2b, 0x48, 0x4b, 0x68, 0x6b]) {
+    assert.ok(!touched.has(reg), `slave operator register 0x${reg.toString(16)} written`);
+  }
+
+  // §4.2: a pan value Note does not know clears both switches and ORs its low
+  // nibble into feedback and connection, until the next patch -- which mends
+  // the feedback but, as in Note, not the switches.
+  d.setVoiceTimbre(1, two, false);
+  const c0 = last(0xc1);
+  d.setVoicePan(1, PAN_NONE, 9);
+  assert.equal(last(0xc1), (c0 & 0x0f) | 9);
+  d.setVoiceTimbre(1, two, false);
+  assert.equal(last(0xc1), c0 & 0x0f);
 });
 
 /* ---------------------------------------------------------------- corpus */
