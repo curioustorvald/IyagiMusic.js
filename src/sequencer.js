@@ -354,8 +354,10 @@ export function* imsSequence(song) {
   const melodicOnly = !song.percussive;
   // §1.5: the song ends at totalTick, or at FC if that comes first -- as in
   // IMPLAY, which reads no event once its tick counter has reached totalTick.
-  // Where the two disagree, everything past totalTick in the corpus is
-  // silence or damage. A totalTick of 0 or less would end IMPLAY before the
+  // Where the two disagree, what lies past totalTick in the corpus is silence
+  // or damage -- or, in D-PRODC#.IMS alone, a closing passage behind a
+  // seven-minute held note that IMPLAY never reached. A totalTick of 0 or
+  // less would end IMPLAY before the
   // first note; no file has one, and this plays to FC rather than to nothing.
   const stop = song.totalTick > 0 ? song.totalTick : Number.MAX_SAFE_INTEGER;
   for (const ev of imsEvents(song)) {

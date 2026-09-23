@@ -233,8 +233,9 @@ test("the meters follow what the song actually plays", { skip: !have }, () => {
 
 test("an .ims ends at totalTick, or at FC if that comes first", { skip: !have }, () => {
   // FILE_FORMATS §1.5: IMPLAY reads no event once its tick counter reaches
-  // totalTick. 316 corpus files carry events past it, all silence or damage:
-  // 314 whose FC comes later, and two damaged ones with no FC at all.
+  // totalTick. 316 corpus files carry events past it: 314 whose FC comes
+  // later, and two damaged ones with no FC at all. All of it is silence or
+  // damage but D-PRODC#.IMS's last half minute (FILE_FORMATS §1.5).
   let cut = 0;
   for (const fn of fs.readdirSync(MEGA)) {
     const bytes = new Uint8Array(fs.readFileSync(path.join(MEGA, fn)));

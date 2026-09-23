@@ -205,18 +205,19 @@ other 312 the last note-on comes before `totalTick`, and what follows is a
 silent tail before `FC`. Its median is 20 beats. `MM-RAIN.IMS` has about
 23 700 beats of it, which is over three hours at its tempo *(measured, 1725)*.
 The three exceptions are the damaged `SPRING.IMS` and `BT-REDMO.IMS` (below)
-and `D-PRODC#.IMS`, whose `totalTick` of 57 840 falls at beat 241 of about
-1070. It looked like the one intact song the rule would cut short, but
-inspected by ear and by event, what lies past `totalTick` is a single
-extremely drawn-out note on channel 5, not more of the song. Three more files
-have a `totalTick` *longer* than their stream; there `FC` ends them first.
+and `D-PRODC#.IMS`, whose `totalTick` of 57 840 falls at 1:58 of 8:42. Its
+music stops at 1:26 with a note on channel 5 left held; that one note is all
+that sounds for the next six and three-quarter minutes, and only at 8:11 does
+every channel come in again, for a 31-second passage before `FC` *(measured)*.
+IMPLAY never reached it. Three more files have a `totalTick` *longer* than
+their stream; there `FC` ends them first.
 
 This library stops where IMPLAY does: at `totalTick`, or at `FC` if that comes
-first. It used to play to `FC`, on the strength of `D-PRODC#.IMS`; with that
-file accounted for, nothing in the corpus past `totalTick` is music, and
-`test/player.test.js` pins the 316 files it trims -- the 314 above whose `FC`
-comes later, and the two damaged ones that have no `FC` at all, which also end
-at `totalTick`.
+first. It used to play to `FC` for the sake of `D-PRODC#.IMS`'s last half
+minute, and gave every other listener the silent tails for it.
+`test/player.test.js` pins the 316 files it now trims -- the 314 above whose
+`FC` comes later, and the two damaged ones that have no `FC` at all, which
+also end at `totalTick`.
 
 Likewise `dataSize` is authoritative for finding the patch table, but one
 corpus file (`HB-NOTGO.IMS`) has 838 bytes of extra event data after its patch
