@@ -4,8 +4,10 @@
 // browser does. The Web Audio wiring lives in the frontend, not here.
 
 import { OPL2, OPL3 } from "./opl/chip.js";
-import { NATIVE_RATE, METER_VOICES, METER_STRIDE, M_VOLUME } from "./opl/constants.js";
-import { voiceLayout } from "./driver.js";
+import {
+  NATIVE_RATE, METER_VOICES, METER_STRIDE, M_VOLUME, M_PEAK, CHANNEL_COUNT, RHYTHM_VOICES,
+} from "./opl/constants.js";
+import { voiceLayout, IMPLAY_PAN } from "./driver.js";
 import {
   parseIms, parseRol, parseBnk, parseIss, parseSop, resolvePatches,
   identify, deltaGcd, resolveIssSpans,
@@ -31,6 +33,30 @@ export { decodeJohab, decodeJohabField } from "./johab2unicode.js";
 
 /** Output scale by chip, before the caller overrides it. See `headroom` below. */
 const DEFAULT_GAIN = { opl2: 0.55, opl3: 0.32 };
+
+export { IMPLAY_PAN };
+
+/**
+ * The "standard" tone: what a sound card designed today would do with the
+ * same chip. Feedback backed off by an eighth, and one pole of low-pass at
+ * 12 kHz on the chip's own output, which takes off the aliasing a 49.7 kHz
+ * DAC with no reconstruction filter to speak of leaves at the top. "raw" is
+ * the chip verbatim, and the library's default.
+ */
+const STANDARD_FEEDBACK = 0.875;
+const STANDARD_CUTOFF_HZ = 12000;
+/**
+ * The low-pass is one pole by the bilinear transform, prewarped: −3 dB at the
+ * cutoff exactly, and a zero at the chip's Nyquist. The simpler y += a·(x − y)
+ * places its pole by the impulse response instead, and with a cutoff this
+ * close to Nyquist that leaves it −2.3 dB at 12 kHz and never more than −4 dB
+ * anywhere -- a filter in name only.
+ *
+ *   y[n] = B·(x[n] + x[n−1]) + A·y[n−1]
+ */
+const STANDARD_WARP = Math.tan(Math.PI * STANDARD_CUTOFF_HZ / NATIVE_RATE);
+const STANDARD_B = STANDARD_WARP / (1 + STANDARD_WARP);
+const STANDARD_A = (1 - STANDARD_WARP) / (1 + STANDARD_WARP);
 
 /**
  * The lyric text that should be lit at a given tick, and how much of it.
@@ -61,6 +87,13 @@ export class IyagiMusic {
    *   the YMF262 it was written for and everything else the YM3812 it was
    *   written for. "opl2" forces the nine-voice reduction a `.sop` used to get
    *   (SOP §8), which is worth having for comparison and for nothing else.
+   * @param {boolean} [opts.implayStereo]
+   *   play an `.ims` or `.rol` in IMPLAY's stereo (ENGINE_SPEC §11.1): on a
+   *   YMF262, every melodic voice on both register banks with a fixed pan per
+   *   channel. `mono` then switches between that and a mono mix identical to
+   *   the YM3812's without reloading. Ignored for a `.sop`, and when `chip`
+   *   is given as anything but "auto".
+   * @param {"raw"|"standard"} [opts.tone]   see `tone`; default "raw"
    * @param {number} [opts.gain]             output scale; default by chip, see below
    * @param {(code:number)=>string|null} [opts.userGlyph]
    *   overrides the built-in mapping for Iyagi's own font glyphs
@@ -85,9 +118,17 @@ export class IyagiMusic {
     if (want !== "auto" && want !== "opl2" && want !== "opl3") {
       throw new Error(`unknown chip ${JSON.stringify(want)}: use "auto", "opl2" or "opl3"`);
     }
+    /**
+     * §11.1: IMPLAY's stereo. The chip is a YMF262, but the voices are still
+     * the YM3812's nine, each played twice.
+     * @type {boolean}
+     */
+    this.mirror = !!opts.implayStereo && want === "auto" && kind !== "sop";
     /** @type {"opl2"|"opl3"} */
-    this.chipKind = want === "auto" ? (kind === "sop" ? "opl3" : "opl2") : want;
+    this.chipKind = this.mirror ? "opl3"
+      : want === "auto" ? (kind === "sop" ? "opl3" : "opl2") : want;
     this.chip = this.chipKind === "opl3" ? new OPL3() : new OPL2();
+    const mirror = this.mirror;
 
     if (kind === "ims") {
       this.song = parseIms(opts.song, this.textOptions);
@@ -101,7 +142,10 @@ export class IyagiMusic {
         percussive: this.song.percussive,
         pitchRange: this.song.pitchRange,
         patches: this.patches,
+        mirror,
       });
+      /** How many instruments the song names -- IMPLAY's "사용 악기". */
+      this.instrumentCount = this.song.patchNames.length;
     } else if (kind === "sop") {
       // A SOP carries its own instruments, so there is no bank to resolve and
       // nothing that can go missing. How its twenty tracks are laid over the
@@ -120,6 +164,7 @@ export class IyagiMusic {
         sop: true,                            // SOP §8.1: play it as NOTE.EXE does
         patches: [],
       });
+      this.instrumentCount = this.song.instruments.filter(Boolean).length;
     } else {
       this.song = parseRol(opts.song, this.textOptions);
       const resolve = (name) => {
@@ -138,7 +183,9 @@ export class IyagiMusic {
         percussive: this.song.percussive,
         pitchRange: 1,
         patches: [],
+        mirror,
       });
+      this.instrumentCount = names.size;
     }
 
     /**
@@ -171,7 +218,9 @@ export class IyagiMusic {
      *
      * @type {number}
      */
-    this.headroom = opts.gain ?? DEFAULT_GAIN[this.chipKind];
+    // IMPLAY's stereo puts each voice on each side at no more than its mono
+    // level, so each bus is an OPL2's worth of voices and wants an OPL2's gain.
+    this.headroom = opts.gain ?? DEFAULT_GAIN[this.mirror ? "opl2" : this.chipKind];
     /** @type {number} the scale actually applied; `volume` moves it. */
     this.gain = this.headroom;
     this.ratio = NATIVE_RATE / this.sampleRate;
@@ -184,6 +233,85 @@ export class IyagiMusic {
     this.prevL = 0;
     this.prevR = 0;
     this.frac = 0;
+    /** @type {"raw"|"standard"} */
+    this.toneMode = "raw";
+    /** Low-pass state: last input and last output, per side. */
+    this.filter = new Float64Array(4);
+    this.tone = opts.tone ?? "raw";
+    /** @type {boolean} */
+    this.monoMix = false;
+    /** Scratch rows for folding a mirrored chip's meters; see `readMeters`. */
+    this.meterScratch = this.mirror ? new Float32Array(METER_VOICES * METER_STRIDE) : null;
+  }
+
+  // ── what a listener can change while it plays ───────────────────────────
+
+  /**
+   * "raw" is the chip as it is. "standard" backs its feedback off by an
+   * eighth and puts one pole of low-pass at 12 kHz after it: see
+   * STANDARD_FEEDBACK. Either can be switched mid-song.
+   * @type {"raw"|"standard"}
+   */
+  get tone() { return this.toneMode; }
+  set tone(v) {
+    if (v !== "raw" && v !== "standard") {
+      throw new Error(`unknown tone ${JSON.stringify(v)}: use "raw" or "standard"`);
+    }
+    this.toneMode = v;
+    this.chip.feedbackScale = v === "standard" ? STANDARD_FEEDBACK : 1;
+  }
+
+  /**
+   * Mono output. On a song in IMPLAY's stereo it centres every voice, which
+   * is sample for sample what a YM3812 plays; on a `.sop` it folds the two
+   * sides together. Takes effect at once. Nothing to do on a mono chip.
+   * @type {boolean}
+   */
+  get mono() { return this.monoMix; }
+  set mono(v) {
+    this.monoMix = !!v;
+    this.sequencer.driver.setMirrorPanning(!this.monoMix);
+  }
+
+  /** Whether `mono` would change anything: the song can come out in stereo. */
+  get canStereo() { return this.stereo; }
+
+  /**
+   * Playback speed as a multiple of the song's tempo, 1 by default. IMPLAY
+   * steps it in twentieths from 0 to 4 (ENGINE_SPEC §13); this takes any
+   * positive number and leaves the stepping to the caller.
+   * @type {number}
+   */
+  get speed() { return this.sequencer.speed; }
+  set speed(v) { this.sequencer.setSpeed(v); }
+
+  /**
+   * Key shift in semitones for the melodic voices, 0 by default. It reaches
+   * each voice at its next note, as IMPLAY's does. IMPLAY allows ±24.
+   * @type {number}
+   */
+  get transpose() { return this.sequencer.transpose; }
+  set transpose(v) { this.sequencer.transpose = Math.trunc(v) || 0; }
+
+  /** The song's tempo right now, in bpm, before `speed`. */
+  get tempo() { return this.sequencer.tempo; }
+
+  /** Length of the song in seconds, at its own tempo. */
+  get duration() { return this.sequencer.timeline().duration; }
+
+  /** Where the song is, in seconds of song time: `duration` at the end. */
+  get position() { return this.sequencer.songSamples / NATIVE_RATE; }
+
+  /**
+   * Jump to a point in the song, in seconds of song time. See
+   * `Sequencer.seek` for what that does and why it sounds as it does.
+   * @param {number} seconds
+   */
+  seek(seconds) {
+    const timeline = this.sequencer.timeline();
+    const tick = timeline.tickAt(Math.min(Math.max(0, seconds), timeline.duration));
+    this.reset();
+    this.sequencer.seek(tick);
   }
 
   /** Song title, already decoded from Johab. */
@@ -240,11 +368,37 @@ export class IyagiMusic {
    * @returns {Float32Array} the same buffer
    */
   readMeters(out) {
-    this.chip.readMeters(out);
+    if (this.mirror) this.#foldMeters(out);
+    else this.chip.readMeters(out);
     const volume = this.sequencer.driver.voiceVolume;
     // Only the rows this chip has: past them the driver has no voice to read a
     // volume off, and writing `undefined` into a Float32Array writes NaN.
     for (let v = 0; v < this.chip.voiceRows; v++) out[v * METER_STRIDE + M_VOLUME] = volume[v];
+    return out;
+  }
+
+  /**
+   * IMPLAY's stereo shows up on the chip as eighteen channels -- every voice
+   * twice -- and a display wants the nine the song has. Each voice's row is
+   * its bank-0 channel's, with the louder of its two copies as the peak:
+   * that is the side a listener hears it on. The drums are the chip's own
+   * last five rows, as always.
+   */
+  #foldMeters(out) {
+    const rows = this.chip.readMeters(this.meterScratch);
+    out.fill(0);
+    const melodic = this.sequencer.driver.melodicVoices;
+    // The chip's rows: bank 0's melodic channels, then all nine of bank 1's.
+    for (let v = 0; v < melodic; v++) {
+      const o = v * METER_STRIDE;
+      const twin = (melodic + v) * METER_STRIDE;
+      out.set(rows.subarray(o, o + METER_STRIDE), o);
+      out[o + M_PEAK] = Math.max(rows[o + M_PEAK], rows[twin + M_PEAK]);
+    }
+    if (this.sequencer.driver.percussion) {
+      const from = (melodic + CHANNEL_COUNT) * METER_STRIDE;
+      out.set(rows.subarray(from, from + RHYTHM_VOICES * METER_STRIDE), melodic * METER_STRIDE);
+    }
     return out;
   }
 
@@ -254,6 +408,7 @@ export class IyagiMusic {
     this.nativeLen = this.nativePos = 0;
     this.frac = 0;
     this.prevL = this.prevR = 0;
+    this.filter.fill(0);
   }
 
   /** Take the next chip sample into `prevL`/`prevR`, refilling if need be. */
@@ -265,10 +420,28 @@ export class IyagiMusic {
         : this.sequencer.render(this.nativeL, 0, this.nativeL.length);
       this.nativePos = 0;
       if (this.nativeLen === 0) { this.prevL = this.prevR = 0; return; }
+      if (this.toneMode === "standard") this.#smooth();
     }
     this.prevL = this.nativeL[this.nativePos];
     this.prevR = this.nativeR[this.nativePos];
     this.nativePos++;
+  }
+
+  /** The standard tone's low-pass, over the block just rendered, in place. */
+  #smooth() {
+    const f = this.filter;
+    const run = (buf, at) => {
+      let x1 = f[at], y1 = f[at + 1];
+      for (let i = 0; i < this.nativeLen; i++) {
+        const x = buf[i];
+        y1 = STANDARD_B * (x + x1) + STANDARD_A * y1;
+        x1 = x;
+        buf[i] = y1;
+      }
+      f[at] = x1; f[at + 1] = y1;
+    };
+    run(this.nativeL, 0);
+    if (this.nativeR !== this.nativeL) run(this.nativeR, 2);
   }
 
   /**
@@ -331,7 +504,7 @@ export class IyagiMusic {
       right.fill(0, offset, offset + count);
       return false;
     }
-    if (!this.stereo) {
+    if (!this.stereo || this.monoMix) {
       this.#resample(left, null, offset, count);
       right.set(left.subarray(offset, offset + count), offset);
       return true;

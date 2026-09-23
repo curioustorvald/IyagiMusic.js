@@ -9,6 +9,7 @@ import {
   METER_STRIDE, M_PEAK, M_VOLUME,
 } from "../src/player.js";
 import { imsEvents } from "../src/formats.js";
+import { imsSequence, END } from "../src/sequencer.js";
 
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
 // The bulk of the corpus lives in one subdirectory. Its name has changed once
@@ -228,4 +229,26 @@ test("the meters follow what the song actually plays", { skip: !have }, () => {
   // Every voice has been given a bank patch, and the epoch moved as it happened.
   assert.equal(m.patchNames.filter(Boolean).length, 11);
   assert.ok(m.patchEpoch > 11);
+});
+
+test("an .ims ends at totalTick, or at FC if that comes first", { skip: !have }, () => {
+  // FILE_FORMATS §1.5: IMPLAY reads no event once its tick counter reaches
+  // totalTick. 316 corpus files carry events past it, all silence or damage:
+  // 314 whose FC comes later, and two damaged ones with no FC at all.
+  let cut = 0;
+  for (const fn of fs.readdirSync(MEGA)) {
+    const bytes = new Uint8Array(fs.readFileSync(path.join(MEGA, fn)));
+    if (identify(bytes) !== "ims") continue;
+    const song = parseIms(bytes);
+    let fc = Infinity;
+    for (const ev of imsEvents(song)) if (ev.status === 0xfc) { fc = ev.tick; break; }
+    const events = [...imsSequence(song)];
+    const end = events.at(-1);
+    assert.equal(end.type, END, fn);
+    const expected = Math.min(fc, song.totalTick);
+    if (Number.isFinite(expected)) assert.equal(end.tick, expected, fn);
+    assert.ok(events.every((e) => e.tick <= song.totalTick), fn);
+    if (song.totalTick < fc) cut++;
+  }
+  assert.equal(cut, 316);
 });

@@ -40,6 +40,15 @@ export const NOTE_ON = 0, NOTE_OFF = 1, VOLUME = 2, PATCH = 3, BEND = 4,
  * @property {number} [order] tie-break within a tick, for ROL's parallel tracks
  */
 
+/**
+ * A song's length and where its ticks fall in time, at its own tempo.
+ * @typedef {object} Timeline
+ * @property {number} endTick where the song ends
+ * @property {number} duration seconds from the start to `endTick`
+ * @property {(tick:number)=>number} secondsAt
+ * @property {(seconds:number)=>number} tickAt
+ */
+
 export class Sequencer {
   /**
    * @param {object} opts
@@ -53,6 +62,8 @@ export class Sequencer {
    * @param {number} [opts.sampleRate]      defaults to the chip's native rate
    * @param {boolean} [opts.opl3]           drive the chip as a YMF262;
    *   defaults to whatever the chip says it is
+   * @param {boolean} [opts.mirror]         drive an OPL3 as IMPLAY does for
+   *   stereo (ENGINE_SPEC §11.1): the nine-voice layout, doubled
    * @param {boolean} [opts.sop]            play `sopSequence` events the way
    *   NOTE.EXE does (SOP §8.1); the driver takes SOP pitches and joins pairs
    *   as the events say
@@ -60,7 +71,8 @@ export class Sequencer {
   constructor(opts) {
     this.chip = opts.chip;
     this.driver = new AdlibDriver(opts.chip, {
-      opl3: opts.opl3 ?? !!opts.chip.opl3, sop: !!opts.sop,
+      opl3: opts.mirror ? false : (opts.opl3 ?? !!opts.chip.opl3),
+      sop: !!opts.sop, mirror: !!opts.mirror,
     });
     this.makeEvents = opts.events;
     this.tickBeat = opts.tickBeat || 240;
@@ -70,7 +82,36 @@ export class Sequencer {
     this.patches = opts.patches ?? [];
     this.sampleRate = opts.sampleRate ?? NATIVE_RATE;
     this.loop = false;
+    /**
+     * Playback speed as a multiple of the song's own tempo. IMPLAY's `<` and
+     * `>` (ENGINE_SPEC §13). It survives `reset`, as a listener's setting
+     * should, and it is not the song's tempo: `tempo` stays what the file says.
+     * @type {number}
+     */
+    this.speed = 1;
+    /**
+     * Semitones added to every note a melodic voice starts -- IMPLAY's key
+     * shift (ENGINE_SPEC §13), except that the drums are left alone. Like
+     * IMPLAY's, it reaches the next note struck rather than the ones already
+     * sounding. Survives `reset`.
+     * @type {number}
+     */
+    this.transpose = 0;
+    /** @type {Timeline|null} built on first use; see `timeline` */
+    this.timelineCache = null;
     this.reset();
+  }
+
+  /**
+   * Change the speed without a jump: what is left of the gap to the next
+   * event is rescaled, so the change is heard from the next sample rather
+   * than from the next event.
+   * @param {number} speed a multiple of the song's tempo; must be positive
+   */
+  setSpeed(speed) {
+    if (!(speed > 0)) throw new RangeError(`speed must be positive, not ${speed}`);
+    if (this.sampleCursor > 0) this.sampleCursor *= this.speed / speed;
+    this.speed = speed;
   }
 
   reset() {
@@ -85,6 +126,12 @@ export class Sequencer {
     this.tick = 0;
     this.sampleCursor = 0;      // fractional samples owed before the next event
     this.samplesRendered = 0;
+    /**
+     * Samples of *song* time so far: what `samplesRendered` would be at speed
+     * 1. It is what a clock or a progress bar wants, because it lines up with
+     * `timeline()` whatever the speed has been.
+     */
+    this.songSamples = 0;
     /** @type {boolean} */
     this.ended = false;
     // What each voice is currently set to, for anything showing the player
@@ -96,9 +143,74 @@ export class Sequencer {
     this.patchEpoch = (this.patchEpoch | 0) + 1;   // never repeats, so a reset shows
   }
 
-  /** Seconds per tick at the current tempo. */
+  /** Seconds per tick at the current tempo and speed. */
   get tickSeconds() {
-    return 60 / (this.tempo * this.tickBeat);
+    return 60 / (this.tempo * this.tickBeat * this.speed);
+  }
+
+  /**
+   * The song's length and its tick-to-time map, at its own tempo. Built by
+   * reading the events through once, which for any song in the corpus is a
+   * few milliseconds, and kept.
+   *
+   * The end is the END event's tick -- or, for an `.ims` with no FC, where
+   * the sequence's closing END sits at the end of time, the last real event's.
+   *
+   * @returns {Timeline}
+   */
+  timeline() {
+    if (this.timelineCache) return this.timelineCache;
+    const steps = [{ tick: 0, seconds: 0, tempo: this.baseTempo }];
+    let last = 0, end = -1;
+    for (const ev of this.makeEvents) {
+      if (ev.type === END) { end = ev.tick >= Number.MAX_SAFE_INTEGER ? last : ev.tick; break; }
+      last = ev.tick;
+      if (ev.type !== TEMPO) continue;
+      const prev = steps[steps.length - 1];
+      const seconds = prev.seconds + (ev.tick - prev.tick) * 60 / (prev.tempo * this.tickBeat);
+      steps.push({ tick: ev.tick, seconds, tempo: ev.tempo });
+    }
+    if (end < 0) end = last;
+    const secondsAt = (tick) => {
+      let i = steps.length - 1;
+      while (i > 0 && steps[i].tick > tick) i--;
+      const s = steps[i];
+      return s.seconds + (tick - s.tick) * 60 / (s.tempo * this.tickBeat);
+    };
+    const tickAt = (seconds) => {
+      let i = steps.length - 1;
+      while (i > 0 && steps[i].seconds > seconds) i--;
+      const s = steps[i];
+      return Math.max(0, Math.round(s.tick + (seconds - s.seconds) * s.tempo * this.tickBeat / 60));
+    };
+    this.timelineCache = { endTick: end, duration: secondsAt(end), secondsAt, tickAt };
+    return this.timelineCache;
+  }
+
+  /**
+   * Jump to `tick`, as IMPLAY does (ENGINE_SPEC §13): start the song over,
+   * run every event before `tick` without making a sound, and carry on from
+   * there. Whatever those events leave behind -- patches, volumes, bends,
+   * tempo -- is exactly what a listener who had played that far would have,
+   * and a note still held at `tick` was keyed during the run and so starts
+   * again from its attack. IMPLAY meant to do that too and does not: its
+   * seek leaves every voice silent until the next note (ENGINE_SPEC §13).
+   *
+   * The caller resets the chip first; the driver's reset only rewrites it.
+   *
+   * @param {number} tick
+   */
+  seek(tick) {
+    const target = Math.max(0, Math.floor(tick));
+    this.reset();
+    while (!this.pending.done && this.pending.value.tick < target) {
+      this.#apply(this.pending.value);
+      this.pending = this.iterator.next();
+      if (this.ended) return;
+    }
+    this.tick = target;
+    this.samplesRendered = this.songSamples =
+      Math.round(this.timeline().secondsAt(target) * this.sampleRate);
   }
 
   /** How far through the song we are, in seconds. */
@@ -113,7 +225,9 @@ export class Sequencer {
         // A slur keeps the key down, so the note changes pitch unstruck.
         if (!ev.legato) d.noteOff(ev.voice);
         if (ev.volume !== undefined) d.setVoiceVolume(ev.voice, ev.volume);
-        d.noteOn(ev.voice, ev.note);
+        // The key shift is for singing along to, and a drum has no key: IMPLAY
+        // moves its drums too, which only detunes the kit.
+        d.noteOn(ev.voice, ev.voice < d.melodicVoices ? ev.note + this.transpose : ev.note);
         break;
       case NOTE_OFF:
         d.noteOff(ev.voice);
@@ -170,6 +284,7 @@ export class Sequencer {
     this.iterator = this.makeEvents[Symbol.iterator]();
     this.pending = this.iterator.next();
     this.tick = 0;
+    this.songSamples = 0;
     this.ended = false;
     this.tempo = this.baseTempo;
     for (let v = 0; v < this.driver.voiceCount; v++) this.driver.noteOff(v);
@@ -219,6 +334,7 @@ export class Sequencer {
       else this.chip.generate(out, offset + written, run);
       this.sampleCursor -= run;
       this.samplesRendered += run;
+      this.songSamples += run * this.speed;
       written += run;
     }
     if (written < count) {
@@ -236,8 +352,15 @@ export class Sequencer {
  */
 export function* imsSequence(song) {
   const melodicOnly = !song.percussive;
+  // §1.5: the song ends at totalTick, or at FC if that comes first -- as in
+  // IMPLAY, which reads no event once its tick counter has reached totalTick.
+  // Where the two disagree, everything past totalTick in the corpus is
+  // silence or damage. A totalTick of 0 or less would end IMPLAY before the
+  // first note; no file has one, and this plays to FC rather than to nothing.
+  const stop = song.totalTick > 0 ? song.totalTick : Number.MAX_SAFE_INTEGER;
   for (const ev of imsEvents(song)) {
     const status = ev.status;
+    if (ev.tick >= stop) { yield { tick: stop, type: END }; return; }
     if (status === 0xfc) { yield { tick: ev.tick, type: END }; return; }
     if (status === 0xf0) {
       yield { tick: ev.tick, type: TEMPO, tempo: song.tempo * (ev.a + ev.b / 128) };
@@ -269,7 +392,9 @@ export function* imsSequence(song) {
         break;                                        // B0 and D0 are ignored
     }
   }
-  yield { tick: Number.MAX_SAFE_INTEGER, type: END };
+  // A stream that runs out without FC -- only damaged files do (§1.5) --
+  // still ends where IMPLAY's counter would.
+  yield { tick: stop, type: END };
 }
 
 /**

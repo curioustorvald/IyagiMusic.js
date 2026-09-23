@@ -205,12 +205,18 @@ other 312 the last note-on comes before `totalTick`, and what follows is a
 silent tail before `FC`. Its median is 20 beats. `MM-RAIN.IMS` has about
 23 700 beats of it, which is over three hours at its tempo *(measured, 1725)*.
 The three exceptions are the damaged `SPRING.IMS` and `BT-REDMO.IMS` (below)
-and one intact song, `D-PRODC#.IMS`, whose `totalTick` of 57 840 would cut
-it off at beat 241 of about 1070. Three more files have a `totalTick`
-*longer* than their stream; there `FC` ends them first.
+and `D-PRODC#.IMS`, whose `totalTick` of 57 840 falls at beat 241 of about
+1070. It looked like the one intact song the rule would cut short, but
+inspected by ear and by event, what lies past `totalTick` is a single
+extremely drawn-out note on channel 5, not more of the song. Three more files
+have a `totalTick` *longer* than their stream; there `FC` ends them first.
 
-This library plays to `FC`. That is the documented disagreement: it keeps
-`D-PRODC#.IMS` whole, at the price of the silent tails IMPLAY never played.
+This library stops where IMPLAY does: at `totalTick`, or at `FC` if that comes
+first. It used to play to `FC`, on the strength of `D-PRODC#.IMS`; with that
+file accounted for, nothing in the corpus past `totalTick` is music, and
+`test/player.test.js` pins the 316 files it trims -- the 314 above whose `FC`
+comes later, and the two damaged ones that have no `FC` at all, which also end
+at `totalTick`.
 
 Likewise `dataSize` is authoritative for finding the patch table, but one
 corpus file (`HB-NOTGO.IMS`) has 838 bytes of extra event data after its patch

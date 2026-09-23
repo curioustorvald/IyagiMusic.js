@@ -83,7 +83,7 @@ export class FormatError extends Error {}
  * @property {number[]} version
  * @property {string} title already Johab-decoded
  * @property {number} tickBeat @property {number} beatMeasure
- * @property {number} totalTick advisory; §1.5 -- FC is what ends the song
+ * @property {number} totalTick where the song ends, if FC has not come first; §1.5
  * @property {number} commandCount
  * @property {number} srcTickBeat the source ROL's tickBeat, or 0; §1.8
  * @property {boolean} percussive
@@ -315,7 +315,7 @@ export function parseIms(data, options) {
     title: text(b, 6, 30, options),
     tickBeat: b[36],
     beatMeasure: b[37],
-    totalTick: dv.getInt32(38, true),   // §1.5: advisory, FC is what ends the song
+    totalTick: dv.getInt32(38, true),   // §1.5: IMPLAY ends the song here, FC or not
     commandCount: dv.getInt32(46, true),
     srcTickBeat: b[50],                 // §1.8: the source ROL's tickBeat, or 0
     percussive: b[58] !== 0,

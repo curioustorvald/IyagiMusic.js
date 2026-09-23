@@ -452,3 +452,65 @@ A YMF262 plays them too, and plays them identically, because it comes up as a
 YM3812 and stays one until 0x105 says otherwise. That is worth testing rather
 than assuming: `test/opl3.test.js` renders the same song on both and compares
 sample for sample.
+
+## 13. IMPLAY's playback controls
+
+IMPLAY 3.1 lets the listener change three things while a song plays: how fast,
+in what key, and where *(IMPLAY.EXE)*. None of them touches the file.
+
+**Speed.** One word holds it, in half-percent steps: 200 is the song as
+written. `>` (or `.`) adds 10, five per cent, while the value is 790 or less,
+so it tops out at 800, four times as fast; `<` (or `,`) takes 10 away while it
+is 10 or more, so it can reach 0. The timer routine multiplies its interrupt
+rate by the value and divides by 200, in integers, and when the result falls
+below 19 interrupts a second it programs a PIT divisor of 0, which the PC reads
+as 65536 -- the BIOS's 18.2 Hz. So 0% does not stop the song; it plays at
+whatever 18.2 ticks a second amounts to. The panel shows the result as
+`Tempo = %4ld` and `%3d%%`: the song's current tempo (as `F0` events have left
+it) times the value over 200, and the value over 2, both in integer division
+-- a 112 bpm song at 90% reads `Tempo = 100   90%`.
+
+**Key.** Each of the eleven channels has its own shift, a signed word of
+semitones, and the `8n`/`9n` handler adds it to the note number before keying
+the voice (§8). A note already sounding keeps its pitch; the shift is heard
+from the next note on that channel. `Ins` raises and `Del` lowers by one, on
+every channel the listener has selected with the keys `1`…; the shift stops
+at +24 and −24. `Tab` puts all eleven back to 0, selected or not. Nothing
+exempts the rhythm channels, so in percussive mode the key moves the bass
+drum and the tom -- and the snare, which follows the tom (§6).
+
+**Seeking.** `Z` and `X` do not jump by a fixed amount. While one is held, a
+cursor walks along the progress bar, one of its 584 positions per screen
+repaint; when it is let go, IMPLAY seeks to `position × totalTick ÷ 584`
+(`totalTick` is the header's, FILE_FORMATS §1.5). The seek itself:
+
+1. Every voice is keyed off and set to volume 0.
+2. If the target is behind the current tick, the song starts over from its
+   first event, with the header's tempo.
+3. Events up to the target are read by a second parser that records what each
+   channel is left with -- patch, volume and bend -- without writing a
+   register.
+4. Each channel then gets its patch (the built-in default if the bank lacks
+   it, §3), its volume and its bend.
+
+Step 4 goes on to strike again any note still held, by the same flag the
+panel's `P` reads -- but the parser in step 3 never sets that flag, and step 1
+has just cleared it on every channel, so the branch never runs. After a seek
+every voice is silent until the song next strikes it.
+
+**The panel.** Each channel's row shows its instrument name, a `P` drawn in
+one colour while the channel holds a note and another while it does not, and
+its key shift; the rhythm channels' names are drawn in a colour of their own.
+The bars above are not a level meter: each is the channel's last note-on
+velocity, decaying, scaled by the mixer.
+
+**This library** (`Sequencer.speed`, `transpose` and `seek`; `IyagiMusic`
+wraps them) takes any positive speed and leaves the stepping to its caller.
+Its key shift is added at note-on as IMPLAY's is, but only for the melodic
+voices: moving the drums only detunes the kit. Its seek always starts over
+and chases from the top, which lands in the same state as IMPLAY's forward
+case, except that a note held across the target is heard: it was keyed
+during the chase, and comes back from its attack -- what IMPLAY's step 4 was
+evidently written to do. With the levels equalised, §11.1's doubled layout is
+the YM3812's output sample for sample, which `test/controls.test.js` checks;
+that is how the web player offers mono without reloading the song.

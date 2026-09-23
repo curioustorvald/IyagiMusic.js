@@ -16,7 +16,7 @@ import {
 } from "./fnum-table.js";
 import {
   CHANNEL_COUNT, OPL3_CHANNEL_COUNT, BANK_STRIDE, REG_FOUROP, REG_OPL3_ENABLE,
-  OPL3_NEW, FOUROP_PAIRS, PAN_CENTRE, PAN_SHIFT, RHYTHM_VOICES,
+  OPL3_NEW, FOUROP_PAIRS, PAN_CENTRE, PAN_LEFT, PAN_RIGHT, PAN_SHIFT, RHYTHM_VOICES,
 } from "./opl/constants.js";
 
 /** §5.2: MIDI note 60 is chip note 48. */
@@ -34,6 +34,26 @@ export const MAX_VOLUME = 127;
  * because nine-voice callers are the common case and 6…10 is what they mean.
  */
 export const BD = 6, SD = 7, TOM = 8, TC = 9, HH = 10;
+
+/**
+ * §11.1: IMPLAY's fixed pan per channel, 0x40 centre, lower is further left.
+ * Set when a song loads and never moved by it; the song has no say.
+ */
+export const IMPLAY_PAN = Object.freeze([
+  0x45, 0x38, 0x1f, 0x12, 0x53, 0x6a, 0x5c, 0x3d, 0x51, 0x17, 0x72,
+]);
+
+/**
+ * §11.1: split a channel volume into IMPLAY's two sides by its pan.
+ * @param {number} volume 0..127 @param {number} pan 0..127, 0x40 centre
+ * @returns {[number, number]} `[right, left]` -- bank 0's level, then bank 1's
+ */
+export function implaySplit(volume, pan) {
+  let right = volume, left = volume;
+  if (pan < 0x40) right -= ((0x40 - pan) * volume) >> 6;
+  if (pan > 0x40) left -= ((pan - 0x40) * volume) >> 6;
+  return [right, left];
+}
 const RHYTHM_MASK = [0x10, 0x08, 0x04, 0x02, 0x01];   // BD, SD, TOM, TC, HH
 
 /** §6: the tom starts two octaves below chip middle C, the snare 7 above it. */
@@ -205,6 +225,11 @@ export class AdlibDriver {
    *   `.sop` (SOP §8.1): bends are SOP pitch values 0..200 on Note's own
    *   F-number table, a joined channel pair stays joined when it is given a
    *   two-operator patch, and a corrupt pan value corrupts 0xC0. Default false.
+   * @param {boolean} [options.mirror] play the nine-channel layout the way
+   *   IMPLAY does on a YMF262 (§11.1): every melodic channel twice, once per
+   *   register bank, bank 0 on the right and bank 1 on the left, with the
+   *   levels split by `IMPLAY_PAN`. The chip must be an OPL3; `opl3` must be
+   *   false, because the voices are still the YM3812's nine. Default false.
    */
   constructor(chip, options = {}) {
     this.chip = chip;
@@ -212,6 +237,16 @@ export class AdlibDriver {
     this.opl3 = !!options.opl3;
     /** @type {boolean} */
     this.sop = !!options.sop;
+    /** @type {boolean} */
+    this.mirror = !!options.mirror && !this.opl3;
+    /**
+     * Mirror mode: whether the two banks get IMPLAY's panned levels (true) or
+     * the same level each (false). The second is mono, sample for sample what
+     * a YM3812 plays, and is what lets a listener switch between the two
+     * mid-song without reloading anything. See `setMirrorPanning`.
+     * @type {boolean}
+     */
+    this.mirrorPanning = true;
     const layout = chipLayout(this.opl3);
     this.banks = layout.banks;
     this.channelCount = layout.channelCount;
@@ -237,8 +272,8 @@ export class AdlibDriver {
   reset() {
     // NEW first: until it is set, a YMF262 ignores its second bank, so zeroing
     // the bank before setting it would zero nothing.
-    if (this.opl3) this.chip.write(REG_OPL3_ENABLE, OPL3_NEW);
-    for (let b = 0; b < this.banks; b++) {
+    if (this.opl3 || this.mirror) this.chip.write(REG_OPL3_ENABLE, OPL3_NEW);
+    for (let b = 0; b < (this.mirror ? 2 : this.banks); b++) {
       const base = b * BANK_STRIDE;
       for (let r = 1; r <= 0xf5; r++) {
         const reg = base + r;
@@ -298,7 +333,7 @@ export class AdlibDriver {
      * @type {Int32Array}
      */
     this.channelC0Or = new Int32Array(this.channelCount);
-    if (this.opl3) for (let c = 0; c < this.channelCount; c++) this.#writeC0(c);
+    if (this.opl3 || this.mirror) for (let c = 0; c < this.channelCount; c++) this.#writeC0(c);
 
     this.setMode(false);
     this.setGlobalParams(0, 0, 0);
@@ -331,12 +366,27 @@ export class AdlibDriver {
       this.chip.write(REG_FOUROP, 0);
     }
     this.#sendAmVibRhythm();
+    // §11.1: in mirror mode channels 6..8 are routed by what they are. As
+    // drums they play on bank 0 alone, to both sides; as melodic channels,
+    // bank 0 is the right.
+    if (this.mirror) for (let c = 6; c < CHANNEL_COUNT; c++) this.#writeC0(c);
+  }
+
+  /**
+   * Mirror mode: IMPLAY's panned levels, or the same level on both banks.
+   * Takes effect at once, on every voice. Ignored outside mirror mode.
+   * @param {boolean} on
+   */
+  setMirrorPanning(on) {
+    if (!this.mirror || this.mirrorPanning === !!on) return;
+    this.mirrorPanning = !!on;
+    for (let s = 0; s < this.slotCount; s++) this.#sendKslLevel(s);
   }
 
   /** @param {boolean} on */
   setWaveSelect(on) {
     this.waveSelect = !!on;
-    for (let s = 0; s < this.slotCount; s++) this.chip.write(0xe0 + this.slotRegister[s], 0);
+    for (let s = 0; s < this.slotCount; s++) this.#writeSlot(0xe0, s, 0);
     this.chip.write(0x01, on ? 0x20 : 0);
   }
 
@@ -584,12 +634,39 @@ export class AdlibDriver {
   #sendKslLevel(slot) {
     const p = this.slotParams[slot];
     const voice = this.#voiceOfSlot(slot);
-    let amplitude = 63 - (p[P_LEVEL] & 63);
-    if (this.#isOutputSlot(slot, voice)) {
-      amplitude = (amplitude * this.voiceVolume[voice] + (MAX_VOLUME + 1) / 2) >> 7;
+    const level = 63 - (p[P_LEVEL] & 63);
+    const ksl = (p[P_KSL] & 3) << 6;
+    const scale = (volume) => (level * volume + (MAX_VOLUME + 1) / 2) >> 7;
+    if (!this.#isOutputSlot(slot, voice)) {
+      this.#writeSlot(0x40, slot, (63 - level) | ksl);
+      return;
     }
-    const value = (63 - amplitude) | ((p[P_KSL] & 3) << 6);
-    this.chip.write(0x40 + this.slotRegister[slot], value);
+    const volume = this.voiceVolume[voice];
+    if (!this.#mirrored(slot)) {
+      this.chip.write(0x40 + this.slotRegister[slot], (63 - scale(volume)) | ksl);
+      return;
+    }
+    // §11.1: the same voice at two levels, one per bank; centred when the
+    // listener has asked for mono.
+    const [right, left] = this.mirrorPanning
+      ? implaySplit(volume, IMPLAY_PAN[voice] ?? 0x40) : [volume, volume];
+    this.chip.write(0x40 + this.slotRegister[slot], (63 - scale(right)) | ksl);
+    this.chip.write(0x140 + this.slotRegister[slot], (63 - scale(left)) | ksl);
+  }
+
+  /**
+   * Mirror mode: whether a slot is doubled onto the second bank -- which
+   * every melodic channel's slots are, and the drums' are not (§11.1).
+   */
+  #mirrored(slot) {
+    if (!this.mirror) return false;
+    return !(this.percussion && this.slotChannel[slot] >= 6);
+  }
+
+  /** An operator register, in bank 0 and, if it is mirrored, in bank 1 too. */
+  #writeSlot(base, slot, value) {
+    this.chip.write(base + this.slotRegister[slot], value);
+    if (this.#mirrored(slot)) this.chip.write(0x100 + base + this.slotRegister[slot], value);
   }
 
   /** Whether channel volume applies to this operator. §4, §10. */
@@ -649,19 +726,32 @@ export class AdlibDriver {
 
   /** §11. One channel's 0xC0: feedback and connection, plus the stereo bits. */
   #writeC0(channel) {
+    const bits = this.channelC0[channel] | this.channelC0Or[channel];
+    if (this.mirror) {
+      // §11.1: IMPLAY writes 0xA0 to bank 0 and 0x50 to bank 1 -- outputs
+      // B+D and A+C, which on a Sound Blaster's wiring are right and left --
+      // and 0xF0, everything, to a drum channel. Only A and B exist here.
+      if (this.percussion && channel >= 6) {
+        this.chip.write(0xc0 + channel, bits | (PAN_CENTRE << PAN_SHIFT));
+        return;
+      }
+      this.chip.write(0xc0 + channel, bits | (PAN_RIGHT << PAN_SHIFT));
+      this.chip.write(0x1c0 + channel, bits | (PAN_LEFT << PAN_SHIFT));
+      return;
+    }
     const pan = this.opl3 ? (this.channelPan[channel] & 3) << PAN_SHIFT : 0;
-    this.#writeChannel(0xc0, channel, this.channelC0[channel] | this.channelC0Or[channel] | pan);
+    this.#writeChannel(0xc0, channel, bits | pan);
   }
 
   #sendAttackDecay(slot) {
     const p = this.slotParams[slot];
-    this.chip.write(0x60 + this.slotRegister[slot],
+    this.#writeSlot(0x60, slot,
       ((p[P_ATTACK] & 0x0f) << 4) | (p[P_DECAY] & 0x0f));
   }
 
   #sendSustainRelease(slot) {
     const p = this.slotParams[slot];
-    this.chip.write(0x80 + this.slotRegister[slot],
+    this.#writeSlot(0x80, slot,
       ((p[P_SUSTAIN] & 0x0f) << 4) | (p[P_RELEASE] & 0x0f));
   }
 
@@ -669,7 +759,7 @@ export class AdlibDriver {
     const p = this.slotParams[slot];
     const value = (p[P_AM] ? 0x80 : 0) | (p[P_VIB] ? 0x40 : 0) |
       (p[P_EG] ? 0x20 : 0) | (p[P_KSR] ? 0x10 : 0) | (p[P_MULTIPLE] & 0x0f);
-    this.chip.write(0x20 + this.slotRegister[slot], value);
+    this.#writeSlot(0x20, slot, value);
   }
 
   /**
@@ -681,7 +771,7 @@ export class AdlibDriver {
   #sendWaveSelect(slot) {
     const mask = this.opl3 ? 7 : 3;
     const wave = this.waveSelect ? this.slotParams[slot][13] & mask : 0;
-    this.chip.write(0xe0 + this.slotRegister[slot], wave);
+    this.#writeSlot(0xe0, slot, wave);
   }
 
   #sendAmVibRhythm() {
@@ -690,10 +780,16 @@ export class AdlibDriver {
     this.chip.write(0xbd, value);
   }
 
-  /** A per-channel register, in whichever bank the channel lives. */
+  /**
+   * A per-channel register, in whichever bank the channel lives -- and, for a
+   * melodic channel in mirror mode, in the second bank as well (§11.1).
+   */
   #writeChannel(base, channel, value) {
     const bank = channel >= CHANNEL_COUNT ? BANK_STRIDE : 0;
     this.chip.write(base + (channel % CHANNEL_COUNT) + bank, value);
+    if (this.mirror && !(this.percussion && channel >= 6)) {
+      this.chip.write(base + channel + BANK_STRIDE, value);
+    }
   }
 
   /** §5.2. */

@@ -154,6 +154,20 @@ class OplChip {
       ch.car = this.operators[OP_BY_OFFSET[CHANNEL_OP_OFFSET[local] + 3] + base];
     }
     this.registers = new Uint8Array(this.opl3 ? 512 : 256);
+    /**
+     * How much of the modulator's own output feeds back into it, as a
+     * fraction of what the silicon does. 1 is the chip; anything else is a
+     * deliberate departure from it, and nothing in the library sets one.
+     *
+     * It exists for a listener who finds the chip's top feedback settings
+     * harsh. Feedback 6 and 7 push the modulator into the noisy, aliasing
+     * regime that is half of what an OPL sounds like and all of what people
+     * complain about; backing it off by an eighth keeps every patch its own
+     * shape and takes the edge off the worst of them. It is a property rather
+     * than a constructor option because a player wants to flip it mid-song.
+     * @type {number}
+     */
+    this.feedbackScale = 1;
     /** @type {Int32Array} channel index → meter row, or -1 while it is not a voice. */
     this.rowOfChannel = new Int32Array(this.channelCount);
     this.reset();
@@ -565,7 +579,7 @@ class OplChip {
    */
   #feedbackOf(ch) {
     if (!ch.feedback) return 0;
-    return ((ch.mod.out + ch.mod.prev) / 2 / (1 << (8 - ch.feedback))) | 0;
+    return ((ch.mod.out + ch.mod.prev) / 2 / (1 << (8 - ch.feedback)) * this.feedbackScale) | 0;
   }
 
   /**

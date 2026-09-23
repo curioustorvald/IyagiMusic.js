@@ -34,12 +34,19 @@ class IyagiProcessor extends AudioWorkletProcessor {
             lyrics: msg.lyrics,
             sampleRate,
             chip: msg.chip,
+            implayStereo: !!msg.implayStereo,
+            tone: msg.tone,
           });
           // The page's slider is a fraction of the chip's headroom, not an
           // absolute scale -- an OPL3 song has twenty voices to fit into the
           // same output as an OPL2 song's nine.
           if (msg.volume !== undefined) this.music.volume = msg.volume;
           this.music.loop = !!msg.loop;
+          // A listener's settings outlive the song: the page sends them with
+          // every load rather than reapplying them after it.
+          if (msg.mono !== undefined) this.music.mono = !!msg.mono;
+          if (msg.speed !== undefined) this.music.speed = msg.speed;
+          if (msg.transpose !== undefined) this.music.transpose = msg.transpose;
           this.playing = false;
           this.patchEpoch = -1;
           this.port.postMessage({
@@ -50,6 +57,12 @@ class IyagiProcessor extends AudioWorkletProcessor {
             lyrics: this.music.lyrics,
             tickBeat: this.music.song.tickBeat,
             chip: this.music.chipKind,
+            implayStereo: this.music.mirror,
+            canStereo: this.music.canStereo,
+            duration: this.music.duration,
+            tempo: this.music.tempo,
+            instrumentCount: this.music.instrumentCount,
+            percussive: !!this.music.song.percussive,
           });
           // One frame of chip status right away, so a display can lay itself
           // out for the right number of voices before anything is played.
@@ -69,6 +82,13 @@ class IyagiProcessor extends AudioWorkletProcessor {
         break;
       case "loop": if (this.music) this.music.loop = !!msg.value; break;
       case "volume": if (this.music) this.music.volume = msg.value; break;
+      case "mono": if (this.music) this.music.mono = !!msg.value; break;
+      case "tone": if (this.music) this.music.tone = msg.value; break;
+      case "speed": if (this.music) this.music.speed = msg.value; break;
+      case "transpose": if (this.music) this.music.transpose = msg.value; break;
+      case "seek":
+        if (this.music) { this.music.seek(msg.seconds); this.#report(true); }
+        break;
       default: break;
     }
   }
@@ -80,6 +100,8 @@ class IyagiProcessor extends AudioWorkletProcessor {
     const msg = {
       type: "position",
       seconds: this.music.seconds,
+      position: this.music.position,
+      tempo: this.music.tempo,
       tick: this.music.tick,
       ended: this.music.ended,
       meter: this.music.readMeters(this.meter),

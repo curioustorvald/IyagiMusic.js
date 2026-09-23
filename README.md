@@ -97,6 +97,28 @@ music.renderStereo(l, r);   // OPL3면 진짜 스테레오, 아니면 같은 줄
 (SOP_FORMAT §8). 음량은 `volume`으로 조절하십시오. 칩이 감당하는 폭을 1로 놓은
 비율이라, 성부가 스물인 곡과 아홉인 곡에 같은 값을 써도 됩니다.
 
+IMPLAY처럼 듣고 싶다면 `implayStereo: true`를 넘기십시오. `.ims`와 `.rol`을
+IMPLAY가 OPL3에서 하던 대로 스테레오로 울립니다 — 모든 멜로디 성부를 두 뱅크에
+한 번씩, 채널마다 정해진 자리로 벌려서(ENGINE_SPEC §11.1). `mono`를 켜면 곡을 다시
+읽지 않고도 YM3812 한 개의 소리와 샘플 단위로 같아집니다.
+
+```js
+const music = new IyagiMusic({ song, bank, implayStereo: true, tone: "standard" });
+
+music.mono = true;         // 재생 중에 바로 바뀝니다
+music.tone = "raw";        // "raw"는 칩 그대로(기본값), "standard"는 되먹임을
+                           // 1/8 줄이고 12 kHz에 1극 저역 통과를 겁니다
+music.speed = 0.9;         // 곡 템포의 배수. IMPLAY는 5%씩 움직입니다
+music.transpose = -2;      // 반음 단위, 다음 음부터. 드럼은 옮기지 않습니다
+music.duration;            // 곡 길이(초), 원래 빠르기 기준
+music.position;            // 지금 위치(초), 같은 기준
+music.seek(60);            // 처음부터 소리 없이 따라가서 60초 지점에 섭니다
+music.instrumentCount;     // IMPLAY의 "사용 악기"
+```
+
+빠르기 · 키 · 위치 옮기기가 IMPLAY에서 어떻게 동작했는지, 그리고 이
+라이브러리가 어디서 다른지는 ENGINE_SPEC §13에 있습니다.
+
 재생 중인 칩 상태는 성부 단위로 읽을 수 있습니다. 스펙트럼은 없습니다 — 칩이
 내놓는 것은 소리뿐이고, 대신 성부마다 무엇을 어떻게 울리고 있는지가 있습니다.
 `IyagiMusic-web`의 막대 표시가 이것을 씁니다.
