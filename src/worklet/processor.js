@@ -103,6 +103,9 @@ class IyagiProcessor extends AudioWorkletProcessor {
       position: this.music.position,
       tempo: this.music.tempo,
       tick: this.music.tick,
+      // What lyrics are held against: not `tick`, which is the next event's
+      // and in the song's own unit (FILE_FORMATS §4.4).
+      lyricTick: this.music.lyricTick,
       ended: this.music.ended,
       meter: this.music.readMeters(this.meter),
       voices: this.music.voiceCount,

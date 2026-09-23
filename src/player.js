@@ -10,7 +10,7 @@ import {
 import { voiceLayout, IMPLAY_PAN } from "./driver.js";
 import {
   parseIms, parseRol, parseBnk, parseIss, parseSop, resolvePatches,
-  identify, deltaGcd, resolveIssSpans,
+  identify, deltaGcd, resolveIssSpans, ISS_TICK_BEAT,
 } from "./formats.js";
 import { Sequencer, imsSequence, rolSequence, sopSequence, sopTempo } from "./sequencer.js";
 
@@ -26,7 +26,7 @@ export {
   CF_RHYTHM, CF_TREMOLO, CF_VIBRATO, CF_WAVESEL, CF_OPL3, CF_FOUROP,
   EG_OFF, EG_ATTACK, EG_DECAY, EG_SUSTAIN, EG_RELEASE,
 } from "./opl/constants.js";
-export { resolveIssSpans } from "./formats.js";
+export { resolveIssSpans, ISS_TICK_BEAT } from "./formats.js";
 export { decodeJohab, decodeJohabField } from "./johab2unicode.js";
 
 /** @typedef {import("./formats.js").Patch} Patch */
@@ -338,8 +338,24 @@ export class IyagiMusic {
   /** Seconds of song rendered so far. */
   get seconds() { return this.sequencer.samplesRendered / NATIVE_RATE; }
 
-  /** Current tick, for lining lyrics up. */
+  /** The sequencer's tick: the next event's, once the samples up to it are banked. */
   get tick() { return this.sequencer.tick; }
+
+  /**
+   * Where the song is in the unit an `.iss` cue is stamped in, which is what
+   * to hold lyrics against: 240 to the beat, fractional (FILE_FORMATS §4.4).
+   * For an `.ims` that is the song's own tick. A `.sop` counts `tickBeat` to
+   * the beat, and a lyric beside it still counts 240, so it is scaled. A
+   * `.rol` is left in its own ticks: no `.rol` in the corpus has lyrics, so
+   * there is nothing to measure a rule against.
+   * @type {number}
+   */
+  get lyricTick() {
+    // The chip samples rendered but not yet resampled out are still to come.
+    const buffered = (this.nativeLen - this.nativePos) / (this.sequencer.tickSeconds * NATIVE_RATE);
+    const at = Math.max(0, this.sequencer.playhead - buffered);
+    return this.kind === "sop" ? at * ISS_TICK_BEAT / this.song.tickBeat : at;
+  }
 
   // ── what the player looks like from outside ─────────────────────────────
 
@@ -545,10 +561,10 @@ export class IyagiMusic {
    * `resolveIssSpans` -- a cue marks the right edge of the highlight, not an
    * isolated run.
    *
-   * @param {number} [tick]
+   * @param {number} [tick] in the cues' own unit, as `lyricTick` gives it
    * @returns {LyricSpan|null}
    */
-  lyricAt(tick = this.tick) {
+  lyricAt(tick = this.lyricTick) {
     if (!this.lyrics) return null;
     this.lyricSpans ??= resolveIssSpans(this.lyrics);
     let index = -1;

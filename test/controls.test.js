@@ -168,6 +168,23 @@ test("speed changes how fast the song goes and not where it ends", () => {
   for (const r of [normal, fast, slow]) assert.ok(Math.abs(r.song - 2 * NATIVE_RATE) <= 2);
 });
 
+test("the playhead is where the song is, not the next event's tick", () => {
+  // 60 bpm, four ticks a beat: a tick is a quarter of a second, and nothing
+  // happens between tick 0 and tick 8. `tick` jumps to 8 at once; the
+  // playhead walks there, which is what a lyric cue has to be held against.
+  const events = [
+    { tick: 0, type: NOTE_ON, voice: 0, note: 60 },
+    { tick: 8, type: NOTE_OFF, voice: 0 },
+    { tick: 12, type: END },
+  ];
+  const seq = tiny(events);
+  seq.render(new Float32Array(NATIVE_RATE), 0, NATIVE_RATE / 2);
+  assert.equal(seq.tick, 8);
+  assert.ok(Math.abs(seq.playhead - 2) < 1e-6, `playhead ${seq.playhead}`);
+  seq.render(new Float32Array(NATIVE_RATE), 0, NATIVE_RATE);
+  assert.ok(Math.abs(seq.playhead - 6) < 1e-6, `playhead ${seq.playhead}`);
+});
+
 test("a seek lands where playing that far would have", () => {
   const events = [
     { tick: 0, type: PATCH, voice: 0, patch: 0 },

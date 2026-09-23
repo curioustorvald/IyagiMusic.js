@@ -641,3 +641,88 @@ IMPLAY also has a second display, drawn at twelve pixels a cell, that ignores
 it. There each line is centred on its visible text, using two bytes the loader
 computes per line: the count of leading spaces, and half the width from the
 first non-space to the last.
+
+### 4.4 Beside a `.sop` — an addendum
+
+An `.iss` was made to go with an `.ims`, and IMPLAY is the only player this
+document has read that shows one. Yet 79 corpus `.sop` files have an `.iss`
+of the same name *(measured, 347 `.sop`)*, and nothing says how the two line
+up. No program that wrote or played them together has been found to read:
+
+- **Note** has no lyric support. Its executable names no lyric file, and the
+  only other song format it knows is `*.IMS`, which it imports *(NOTE.EXE)*.
+- **`SOPPLAY.EXE`**, the Windows 95 player of 1996, names no format but
+  `.sop` anywhere in its strings; its open dialog offers `*.sop` alone.
+- **A player plugin of 2005** did pair them. Its header, `TS.H`, sits with
+  Park Jin-hong's `AD262SOP` library of the same year, and it is the only
+  part of the plugin in that archive. It loads SOP, IMS, ROL and ISS, keeps each record's
+  stored tick beside a computed song tick and millisecond time, and defines
+  `TIMEBASE 240`. The code that fills those fields in is lost, so the
+  conversion cannot be read off it.
+
+So the rule below is measured, not read from a program.
+
+**A cue counts IMS ticks, 240 to the beat, whatever song it sits beside.**
+The stored value converts to IMS ticks exactly as §4.2 says. Against a
+`.sop` with `tickBeat` *T* (SOP_FORMAT §1), that is
+
+```
+sopTick = imsTick × T / 240        = stored × T / 30    in a V2 file
+```
+
+All 79 files have a V2 header, so the older tenths have not been seen beside
+a `.sop`.
+
+`JAM-EVAN` shows it plainly, because the song opens on the vocal, track 1 (the second).
+Its `tickBeat` is 8.
+
+| vocal note, SOP tick | 32 | 48 | 64 | 76 | 88 |
+|---|---|---|---|---|---|
+| cue, as stored | 120 | 180 | 240 | 285 | 330 |
+| stored × 8 / 30 | 32 | 48 | 64 | 76 | 88 |
+
+The same holds across all 79 pairs *(measured)*:
+
+- **Where the lyrics end.** Read this way, the last cue lands at a median
+  0.987 of the way through the song, measured to its last note-off. For the
+  V2 files beside an `.ims` the figure is 0.977 (§4.2). 74 of the 79 fall
+  between 0.86 and 1.01. Read as the SOP's own ticks, the lyrics would end
+  `240 / T` song-lengths out, which is 15 to 60 times the song.
+- **Where cues fall.** 13 554 of the 35 606 cues convert to a whole SOP
+  tick, and 12 798 of those fall on a note's start in some track. Read as
+  the SOP's own ticks, 1523 cues do.
+
+The other 22 052 cues fall between SOP ticks, and that is expected. An ISS
+counts 30 to the beat, which is finer than any `tickBeat` in the corpus (4 to
+16), and many cues were tapped in by hand rather than put on a grid. A player
+has to hold them against a fractional song position. Rounding to the SOP's
+tick would move them.
+
+Why it works is an inference, not a finding. Note's IMS import keeps the beat
+and the tempo, and only coarsens the grid (SOP_FORMAT §9). So a lyric timed
+against the `.ims` is still in time with the `.sop` it became, as long as
+both are counted in beats. Only three of the 79 have their `.ims` in the
+corpus as well, so this is hard to check directly.
+
+Tempo does not come into it. Both clocks count beats, and the song's tempo
+events move them together. That includes Note's rounding of the timer
+(SOP_FORMAT §5). Everything else §4.2 measures in ticks, such as how early a
+line is shown before its first record and the four-beat cap on that, is in
+the same 240-to-the-beat unit.
+
+**Five pairs do not fit, and no rule makes them fit** *(measured)*:
+
+| pair | last cue ÷ song length | |
+|---|---|---|
+| `SIM-015B` | 4.685 | the `.iss` fits the `.ims` of the same name, at 0.962; the `.sop` is a different, 170-beat piece |
+| `SIM-PRO` | 1.968 | fits its `.ims` at 0.990; the `.sop` takes about half as many beats |
+| `ORANGE1` | 1.321 | no `.ims` in the corpus |
+| `CS-HALL1` | 0.678 | no `.ims` in the corpus |
+| `BIV_2MJ` | 0.503 | no `.ims` in the corpus |
+
+The first two are name collisions: lyrics for an `.ims` that ended up next to
+an unrelated arrangement. The other three may be the same thing with the
+`.ims` missing. There is not enough here to say.
+
+No `.rol` in the corpus has an `.iss` beside it, so nothing is known about
+that pairing. The library leaves a `.rol`'s lyrics in the song's own ticks.

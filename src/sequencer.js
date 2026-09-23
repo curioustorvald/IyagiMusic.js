@@ -213,6 +213,22 @@ export class Sequencer {
       Math.round(this.timeline().secondsAt(target) * this.sampleRate);
   }
 
+  /**
+   * Where the song actually is, in ticks, with the fraction. `tick` is not
+   * that: it moves to the next event's tick as soon as the samples leading up
+   * to that event are banked, so it runs ahead by up to a whole gap between
+   * events. Nothing that drives the chip minds, but a display does -- a SOP's
+   * events can be half a beat apart, and a lyric cue lit that early is
+   * visibly early. This backs the banked samples out again. A speed change
+   * part-way through a gap makes it slightly wrong until the next event,
+   * because the samples were banked at the old speed.
+   * @type {number}
+   */
+  get playhead() {
+    const owed = this.sampleCursor > 0 ? this.sampleCursor / (this.tickSeconds * this.sampleRate) : 0;
+    return Math.max(0, this.tick - owed);
+  }
+
   /** How far through the song we are, in seconds. */
   get seconds() {
     return this.samplesRendered / this.sampleRate;

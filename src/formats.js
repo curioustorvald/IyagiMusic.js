@@ -13,6 +13,12 @@ const BNK_PATCH_RECORD_SIZE = 30;
 const ISS_HEADER_SIZE = 154;
 const ISS_RECORD_SIZE = 5;
 const ISS_LINE_SIZE = 64;
+/**
+ * The clock an `.iss` cue's `tick` counts: IMS ticks, 240 to the beat. It is
+ * the song's own tick only for an `.ims`; beside a `.sop` the lyric still
+ * counts 240 to the beat, whatever the song's `tickBeat` (§4.4).
+ */
+export const ISS_TICK_BEAT = 240;
 const SOP_HEADER_SIZE = 76;
 /** SOP §3.1: instType byte, then char[8] shortName and char[19] longName. */
 const SOP_INST_NAME_SIZE = 28;
@@ -139,9 +145,10 @@ export class FormatError extends Error {}
  * One lyric cue: a run of cells to paint, on top of whatever the line already
  * has painted. §4.2.
  * @typedef {object} IssCue
- * @property {number} tick when IMPLAY paints it, in song ticks -- the stored
- *   value scaled to ticks (§4.2) and held back behind any earlier record in
- *   the file, because IMPLAY walks the records in file order
+ * @property {number} tick when IMPLAY paints it, in IMS ticks (`ISS_TICK_BEAT`
+ *   to the beat, §4.4) -- the stored value scaled to ticks (§4.2) and held
+ *   back behind any earlier record in the file, because IMPLAY walks the
+ *   records in file order
  * @property {number} stored the record's own tick field, as stored
  * @property {number} line @property {number} startX @property {number} widthX
  */

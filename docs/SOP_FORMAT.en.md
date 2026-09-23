@@ -620,6 +620,12 @@ rely on the default, slot 0 holds an instrument *(measured, 347)*; where it did
 not, Note would play on reset registers, and this library stands in the first
 instrument in the table that yields a patch instead.
 
+**Lyrics.** Note has no lyric file, but 79 corpus SOPs have an `.iss` of the
+same name *(measured, 347)*. Their cues count 240 ticks to the beat, as they
+do beside an `.ims`, not the SOP's `tickBeat`. So a cue belongs at SOP tick
+`imsTick × tickBeat / 240`, and often lands between two SOP ticks.
+FILE_FORMATS §4.4 has the measurement and the five pairs that do not fit.
+
 ### 8.1 Where this library does not follow Note
 
 | Behaviour | Note *(NOTE.EXE)* | This library |

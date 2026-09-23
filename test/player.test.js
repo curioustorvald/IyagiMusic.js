@@ -180,6 +180,53 @@ test("old-header ISS files store ticks in tenths, and IMPLAY scales them", { ski
     `old ${median(ratios.old).toFixed(3)} vs V2 ${median(ratios.v2).toFixed(3)}`);
 });
 
+test("an ISS beside a SOP counts 240 ticks to the beat, not the SOP's own", { skip: !have }, () => {
+  // FILE_FORMATS §4.4. JAM-EVAN opens on the vocal, track 1, at SOP ticks
+  // 32, 48, 64, 76, 88 with tickBeat 8; its first five cues are stored as
+  // 120, 180, 240, 285, 330 -- the same instants at 30 to the beat.
+  const song = read("IMS_FILE_MEGA_CORPUS/JAM-EVAN.SOP");
+  const lyrics = read("IMS_FILE_MEGA_CORPUS/JAM-EVAN.ISS");
+  const m = new IyagiMusic({ song, lyrics });
+  const vocal = m.song.tracks[1].events.filter((e) => e.code === 2).slice(0, 5).map((e) => e.tick);
+  assert.deepEqual(vocal, [32, 48, 64, 76, 88]);
+  assert.deepEqual(m.lyrics.cues.slice(0, 5).map((c) => c.tick * m.song.tickBeat / 240), vocal);
+
+  // Across every SOP that has a same-named ISS, the last cue lands near the
+  // song's end only when read in beats; in the SOP's own ticks it would sit
+  // 240 / tickBeat -- 15 to 60 -- song-lengths out.
+  const names = new Map(fs.readdirSync(MEGA).map((f) => [f.toUpperCase(), f]));
+  const ratios = [];
+  for (const [upper, fn] of names) {
+    if (!upper.endsWith(".SOP") || !names.has(upper.replace(/SOP$/, "ISS"))) continue;
+    const m2 = new IyagiMusic({
+      song: new Uint8Array(fs.readFileSync(path.join(MEGA, fn))),
+      lyrics: new Uint8Array(fs.readFileSync(path.join(MEGA, names.get(upper.replace(/SOP$/, "ISS"))))),
+    });
+    let end = 0;
+    for (const t of m2.song.tracks) for (const e of t.events) if (e.code === 2) end = Math.max(end, e.tick + e.length);
+    ratios.push(m2.lyrics.cues.at(-1).tick * m2.song.tickBeat / 240 / end);
+  }
+  ratios.sort((a, b) => a - b);
+  assert.equal(ratios.length, 79);
+  const fits = ratios.filter((r) => r > 0.85 && r < 1.02).length;
+  assert.equal(fits, 74, "five pairs are known not to belong together");
+  assert.ok(Math.abs(ratios[ratios.length >> 1] - 0.987) < 0.005, `median ${ratios[ratios.length >> 1]}`);
+
+  // And the player holds the lyric against that clock: rendered up to the
+  // vocal's first note, the first cue is due and the second is not.
+  const at = (seconds) => {
+    const p = new IyagiMusic({ song, lyrics, sampleRate: 8000 });
+    p.render(new Float32Array(Math.round(seconds * 8000)));
+    return p;
+  };
+  const first = m.sequencer.timeline().secondsAt(32);
+  const second = m.sequencer.timeline().secondsAt(48);
+  assert.equal(at(first - 0.05).lyricAt(), null);
+  const lit = at((first + second) / 2);
+  assert.ok(lit.lyricTick >= 960 && lit.lyricTick < 1440, `lyricTick ${lit.lyricTick}`);
+  assert.equal(lit.lyricAt().line, m.lyrics.cues[0].line);
+});
+
 test("ISS cues tile a lyric line contiguously", { skip: !have }, () => {
   // Why the painted cells are left standing: cue runs abut each other rather
   // than scattering, so together they wipe the line (FILE_FORMATS §4.2).
