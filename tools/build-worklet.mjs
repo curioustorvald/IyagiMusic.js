@@ -24,6 +24,7 @@ export const FILES = [
   "src/opl/chip.js",
   "src/formats.js",
   "src/driver.js",
+  "src/pcm.js",
   "src/sequencer.js",
   "src/player.js",
   "src/worklet/processor.js",

@@ -6,6 +6,7 @@
 
 import { AdlibDriver, BD, MID_PITCH } from "./driver.js";
 import { imsEvents, sopPatch } from "./formats.js";
+import { PcmMixer } from "./pcm.js";
 import {
   NATIVE_RATE, METER_VOICES, RHYTHM_VOICES,
   PAN_LEFT, PAN_RIGHT, PAN_CENTRE,
@@ -38,6 +39,11 @@ export const NOTE_ON = 0, NOTE_OFF = 1, VOLUME = 2, PATCH = 3, BEND = 4,
  * @property {boolean} [wide] SOP: a PATCH for a voice whose channel pair is joined
  * @property {number} [tempo] beats per minute
  * @property {number} [order] tie-break within a tick, for ROL's parallel tracks
+ * @property {boolean} [pcm] the event is for a sample voice, not a chip voice:
+ *   `voice` counts the sample voices from 0, a PATCH carries `sample`, and a
+ *   BEND carries `cents`
+ * @property {import("./pcm.js").PcmSample|null} [sample] a sample voice's PATCH
+ * @property {number} [cents] a sample voice's BEND, from its note's own pitch
  */
 
 /**
@@ -67,6 +73,8 @@ export class Sequencer {
    * @param {boolean} [opts.sop]            play `sopSequence` events the way
    *   NOTE.EXE does (SOP §8.1); the driver takes SOP pitches and joins pairs
    *   as the events say
+   * @param {number} [opts.sampleVoices]   how many sample voices the `pcm`
+   *   events address; none by default. They are mixed into the chip's output.
    */
   constructor(opts) {
     this.chip = opts.chip;
@@ -97,6 +105,26 @@ export class Sequencer {
      * @type {number}
      */
     this.transpose = 0;
+    /** @type {PcmMixer|null} the sample voices, if the song has any */
+    this.pcm = opts.sampleVoices > 0 ? new PcmMixer(opts.sampleVoices, this.sampleRate) : null;
+    /**
+     * How a sample voice's note becomes a playback rate. A number is the note
+     * at which a sample plays at its own recorded rate, every semitone away
+     * from it a twelfth of an octave; null plays every note at the recorded
+     * rate. Which of these a format means is the format's business -- for
+     * SOP 0.2 it is SOP_SAMPLE_REFERENCE, which the player sets -- so the
+     * sequencer assumes nothing. It reaches the next note struck. Survives
+     * `reset`.
+     * @type {number|null}
+     */
+    this.sampleReference = null;
+    /**
+     * Whether a sample voice stops when its note ends, or plays its sample to
+     * the end. Also the format's business -- for SOP 0.2 it is
+     * SOP_SAMPLE_CUT, which the player sets. Survives `reset`.
+     * @type {boolean}
+     */
+    this.sampleCut = false;
     /** @type {Timeline|null} built on first use; see `timeline` */
     this.timelineCache = null;
     this.reset();
@@ -118,6 +146,10 @@ export class Sequencer {
     this.driver.reset();
     this.driver.setMode(this.percussive);
     this.driver.setPitchRange(this.pitchRange);
+    this.pcm?.reset();
+    /** A sample voice's last note and bend, so a bend can retune it. */
+    this.sampleNote = new Array(this.pcm?.voiceCount ?? 0).fill(-1);
+    this.sampleCents = new Array(this.pcm?.voiceCount ?? 0).fill(0);
     /** @type {number} */
     this.tempo = this.baseTempo;
     this.iterator = this.makeEvents[Symbol.iterator]();
@@ -234,7 +266,41 @@ export class Sequencer {
     return this.samplesRendered / this.sampleRate;
   }
 
+  /** The rate a sample voice plays its sample at, for `note` and `cents`. */
+  #sampleRate(voice, note, cents) {
+    const sample = this.pcm.voices[voice].sample;
+    if (!sample) return 0;
+    const semis = (this.sampleReference === null ? 0 : note - this.sampleReference) + cents / 100;
+    return sample.rate * 2 ** (semis / 12);
+  }
+
+  /** An event for a sample voice. The mixer holds the state; this translates. */
+  #applyPcm(ev) {
+    const p = this.pcm;
+    if (!p || ev.voice >= p.voiceCount) return;
+    const v = ev.voice;
+    switch (ev.type) {
+      case NOTE_ON:
+        if (ev.volume !== undefined) p.setVolume(v, ev.volume);
+        this.sampleNote[v] = ev.note;
+        p.trigger(v, this.#sampleRate(v, ev.note, this.sampleCents[v]));
+        break;
+      case NOTE_OFF:
+        if (this.sampleCut) p.stop(v);
+        break;
+      case VOLUME: p.setVolume(v, ev.volume); break;
+      case PATCH: p.setSample(v, ev.sample ?? null); break;
+      case PAN: p.setPan(v, ev.pan); break;
+      case BEND:
+        this.sampleCents[v] = ev.cents ?? 0;
+        if (this.sampleNote[v] >= 0) p.retune(v, this.#sampleRate(v, this.sampleNote[v], this.sampleCents[v]));
+        break;
+      default: break;
+    }
+  }
+
   #apply(ev) {
+    if (ev.pcm) { this.#applyPcm(ev); return; }
     const d = this.driver;
     switch (ev.type) {
       case NOTE_ON:
@@ -304,6 +370,7 @@ export class Sequencer {
     this.ended = false;
     this.tempo = this.baseTempo;
     for (let v = 0; v < this.driver.voiceCount; v++) this.driver.noteOff(v);
+    for (let v = 0; v < (this.pcm?.voiceCount ?? 0); v++) this.pcm.stop(v);
   }
 
   /**
@@ -332,13 +399,28 @@ export class Sequencer {
     return this.#run(left, right, offset, count);
   }
 
+  /**
+   * Whether there is nothing left to render: the song has ended and no
+   * sample is still playing past its end. `ended` alone is the song's own
+   * END, which a sample struck just before it outlasts -- `ending.sop`'s last
+   * explosion runs 0.27 s past its song's end. The chip is kept running under
+   * such a tail, so its release goes with it, but no event is read.
+   * @type {boolean}
+   */
+  get finished() { return this.ended && !this.pcm?.active; }
+
   #run(out, right, offset, count) {
     let written = 0;
     while (written < count) {
       if (this.sampleCursor <= 0) {
-        if (this.ended) break;
-        this.#drain();
-        if (this.ended) break;
+        if (!this.ended) this.#drain();
+        if (this.ended) {
+          if (!this.pcm?.active) break;
+          // A sample's tail: render the rest of the block, then look again.
+          this.#tail(out, right, offset + written, count - written);
+          written = count;
+          break;
+        }
         // Advance to the next event's tick and bank the samples it is worth.
         const nextTick = this.pending.done ? this.tick + 1 : this.pending.value.tick;
         const deltaTicks = Math.max(1, nextTick - this.tick);
@@ -348,6 +430,9 @@ export class Sequencer {
       const run = Math.min(count - written, Math.max(1, Math.floor(this.sampleCursor)));
       if (right) this.chip.generateStereo(out, right, offset + written, run);
       else this.chip.generate(out, offset + written, run);
+      // The samples go in on the chip's clock, before anything resamples it,
+      // so they land on the same sample as the FM event beside them.
+      this.pcm?.mix(out, right, offset + written, run);
       this.sampleCursor -= run;
       this.samplesRendered += run;
       this.songSamples += run * this.speed;
@@ -358,6 +443,18 @@ export class Sequencer {
       if (right) right.fill(0, offset + written, offset + count);
     }
     return written;
+  }
+
+  /**
+   * Past the song's end, while a sample still plays. Song time does not move
+   * -- `position` stays at the end, where a progress bar wants it -- but
+   * rendered time does.
+   */
+  #tail(out, right, offset, count) {
+    if (right) this.chip.generateStereo(out, right, offset, count);
+    else this.chip.generate(out, offset, count);
+    this.pcm.mix(out, right, offset, count);
+    this.samplesRendered += count;
   }
 }
 
@@ -518,6 +615,34 @@ export function sopTempo(bpm, tickBeat) {
   return ((PIT_HZ / divisor) / interruptsPerTick) * 60 / tickBeat;
 }
 
+/**
+ * SOP §10.6: the note at which a version-0.2 WAV track plays a sample at its
+ * recorded rate. The files cannot say; this was chosen by ear, against
+ * recordings of the game the known files come from. It is a C, where a
+ * tracker plays a sample as recorded.
+ */
+export const SOP_SAMPLE_REFERENCE = 24;
+
+/**
+ * SOP §10.6: a version-0.2 sample stops when its note ends. Nothing could
+ * confirm it -- the one note it matters for is the last hit of the game's
+ * ending, and the game's cutscene ends before the music does -- so this is a
+ * judgement: it is the reading under which a note's length means anything.
+ */
+export const SOP_SAMPLE_CUT = true;
+
+/**
+ * SOP §10.2: the tracks of a version-0.2 SOP that play samples -- mode 3 --
+ * in the order `sopSequence` gives them sample voices. Empty for version 0.1.
+ * @param {import("./formats.js").SopSong} song
+ * @returns {number[]}
+ */
+export function sopSampleTracks(song) {
+  const out = [];
+  song.tracks.forEach((t, i) => { if (t.mode === 3) out.push(i); });
+  return out;
+}
+
 /** SOP §4.2: Note's volume for a track that has not had a volume event yet. */
 const SOP_DEFAULT_VOLUME = 96;
 
@@ -558,9 +683,13 @@ const SOP_DEFAULT_VOLUME = 96;
  * - **Panning is a voice setting**, so it is emitted per voice rather than per
  *   track, and lands wherever the track's notes landed. A mono chip drops it,
  *   except for what a corrupt value does to feedback.
- * - **Version 0.2's WAV tracks are not here** (§10.2). They play samples, and
- *   the sequence is for an FM chip; the samples are in the song's
- *   instruments for whoever mixes them.
+ * - **Version 0.2's WAV tracks go to sample voices** (§10.2), one each, in
+ *   track order, as `pcm` events: their instrument selects a sample, their
+ *   pitch becomes cents about the note, and their volume and pan follow the
+ *   same rules as the FM tracks beside them. A note becomes a NOTE_ON with
+ *   the note number as the file has it; what rate that means is the
+ *   sequencer's `sampleReference`, which for SOP 0.2 is SOP_SAMPLE_REFERENCE
+ *   (§10.6).
  *
  * @param {import("./formats.js").SopSong} song
  * @param {{melodicVoices:number, rhythmBase:number, fourOpPairs:number[][]}} [layout]
@@ -580,11 +709,12 @@ export function sopSequence(song, layout) {
   const rhythmVoiceOf = (t) =>
     (percussive && t >= 6 && t < 6 + RHYTHM_VOICES ? rhythmBase + (t - 6) : -1);
   // §2 and §4.1: which tracks Note plays at all. §10.2: a version-0.2 WAV
-  // track (mode 3) plays samples, which no OPL voice can, so it is not
-  // sequenced here -- its notes would otherwise sound on whatever FM patch
-  // the track's default slot holds.
+  // track (mode 3) plays samples, which no OPL voice can; it gets a sample
+  // voice of its own instead, and is kept off the chip.
   const plays = (t) => song.tracks[t].mode !== 0 && song.tracks[t].mode !== 3
     && (percussive || (t !== 9 && t !== 10));
+  const sampleVoiceOf = new Array(nTracks).fill(-1);
+  sopSampleTracks(song).forEach((t, i) => { sampleVoiceOf[t] = i; });
   const centredPan = song.version[0] > 0 || song.version[1] >= 2;
 
   // §2: hand the four-operator channel pairs to the mode-1 tracks, in track
@@ -616,7 +746,7 @@ export function sopSequence(song, layout) {
   const merged = [];
   for (const ev of song.control) merged.push({ ev, track: -1, source: 0 });
   for (let t = 0; t < nTracks; t++) {
-    if (!plays(t)) continue;
+    if (!plays(t) && sampleVoiceOf[t] < 0) continue;
     for (const ev of song.tracks[t].events) merged.push({ ev, track: t, source: 1 });
   }
   merged.sort((a, b) => a.ev.tick - b.ev.tick || a.source - b.source);
@@ -681,11 +811,55 @@ export function sopSequence(song, layout) {
     globalVolume = value;
     for (let t = 0; t < nTracks; t++) {
       if (!touched[t]) continue;
+      if (sampleVoiceOf[t] >= 0) {
+        out.push({ tick, type: VOLUME, pcm: true, voice: sampleVoiceOf[t], volume: volumeOf(t), order: 2 });
+        continue;
+      }
       const voice = fixedVoiceOf(t);
       if (voice >= 0) emitVolume(tick, voice, t);
       else if (trackVoice[t] >= 0 && voiceTrack[trackVoice[t]] === t) {
         emitVolume(tick, trackVoice[t], t);
       }
+    }
+  };
+
+  /** The note-off already emitted for each sample voice, so a retrigger can drop it. */
+  const sampleOff = [];
+  /** §10.2: one event of a WAV track, for its sample voice. */
+  const sampleEvent = (ev, t, voice) => {
+    const at = { tick: ev.tick, pcm: true, voice };
+    switch (ev.code) {
+      case 6: {                                              // a sample, or nothing
+        // Every WAV track in the known files selects FM slot 0 at tick 0
+        // before any sample. Nothing can play that here, so it is passed over
+        // and the voice keeps what it had -- as an empty slot does in Note.
+        const pcm = song.instruments[ev.value]?.pcm;
+        if (pcm) out.push({ ...at, type: PATCH, sample: pcm, order: 1 });
+        break;
+      }
+      case 4:
+        trackVolume[t] = ev.value;
+        out.push({ ...at, type: VOLUME, volume: volumeOf(t), order: 2 });
+        break;
+      case 5:                                                // 0..200 about 100: cents
+        out.push({ ...at, type: BEND, cents: ev.value - 100, order: 2 });
+        break;
+      case 7:
+        out.push({ ...at, type: PAN, pan: sopPan(ev.value, centredPan).pan, order: 2 });
+        break;
+      case 2: {
+        // A note struck while the last one's sample plays restarts it; the
+        // last one's note-off must not then stop the new one.
+        const pending = sampleOff[voice];
+        if (pending && pending.tick > ev.tick) pending.dead = true;
+        out.push({ ...at, type: NOTE_ON, note: ev.value, volume: volumeOf(t), order: 4 });
+        const off = { tick: ev.tick + Math.max(1, ev.length ?? 1), type: NOTE_OFF, pcm: true, voice, order: 3 };
+        out.push(off);
+        sampleOff[voice] = off;
+        break;
+      }
+      default:
+        break;
     }
   };
 
@@ -701,6 +875,12 @@ export function sopSequence(song, layout) {
       continue;
     }
     touched[track] = true;
+    if (sampleVoiceOf[track] >= 0) {
+      // §4.3, §5: a global volume counts wherever it is; a tempo does not.
+      if (ev.code === 8) setGlobalVolume(ev.tick, ev.value);
+      else sampleEvent(ev, track, sampleVoiceOf[track]);
+      continue;
+    }
     const fixed = fixedVoiceOf(track);
     const held = fixed >= 0
       ? fixed

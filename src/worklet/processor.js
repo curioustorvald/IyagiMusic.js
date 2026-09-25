@@ -36,6 +36,8 @@ class IyagiProcessor extends AudioWorkletProcessor {
             chip: msg.chip,
             implayStereo: !!msg.implayStereo,
             tone: msg.tone,
+            sampleReference: msg.sampleReference,
+            sampleCut: msg.sampleCut,
           });
           // The page's slider is a fraction of the chip's headroom, not an
           // absolute scale -- an OPL3 song has twenty voices to fit into the
@@ -63,6 +65,7 @@ class IyagiProcessor extends AudioWorkletProcessor {
             tempo: this.music.tempo,
             instrumentCount: this.music.instrumentCount,
             percussive: !!this.music.song.percussive,
+            sampleVoices: this.music.sampleVoiceCount,
           });
           // One frame of chip status right away, so a display can lay itself
           // out for the right number of voices before anything is played.
@@ -86,6 +89,8 @@ class IyagiProcessor extends AudioWorkletProcessor {
       case "tone": if (this.music) this.music.tone = msg.value; break;
       case "speed": if (this.music) this.music.speed = msg.value; break;
       case "transpose": if (this.music) this.music.transpose = msg.value; break;
+      case "sampleReference": if (this.music) this.music.sampleReference = msg.value; break;
+      case "sampleCut": if (this.music) this.music.sampleCut = !!msg.value; break;
       case "seek":
         if (this.music) { this.music.seek(msg.seconds); this.#report(true); }
         break;

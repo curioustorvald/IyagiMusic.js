@@ -776,15 +776,20 @@ sign of it, which suggests the scene left `tickBeat` where the import put it.
 ## 10. Version 0.2 — four WAV tracks
 
 Four files outside the corpus say version **0.2**: `ending.sop`, `ending03.sop`,
-`mute.sop` and `op.sop`. They came to this study in one archive, beside six
-ordinary version-0.1 files (`ANT_*.SOP`), and version 0.2 is reportedly the
-format of a SOP library that was only ever used embedded in other programs. No
+`mute.sop` and `op.sop`. They are music from the Korean video game *개미맨*,
+based on 김태형's manhwa of the same name (and unrelated to Marvel's Ant-Man).
+They came to this study in one archive, beside six ordinary version-0.1 files
+whose names begin `ANT_`, and version 0.2 is reportedly the format of a SOP
+library that was only ever used embedded in other programs. No
 program that reads it has been found. HTS refuses anything but 0.1 (§1), and so
 do `TS.C` and roboplay's `sop.c`; NOTE.EXE has no record size for the new
 instrument type (§3.1), and `SOPPLAY.EXE` names no wave-output function at all.
-So everything below is read from the four files alone. A claim marked
-*(measured, v0.2)* holds for all four, and none of the four is counted in any
-other *(measured)* figure.
+So everything below is read from the four files alone, with one exception. A
+claim marked *(measured, v0.2)* holds for all four, and none of the four is
+counted in any other *(measured)* figure. The exception is marked *(by ear)*:
+it was chosen by listening to this library play the files against recordings
+of the game, which is evidence about how the game sounds, not about anything
+written down.
 
 The structure is not in doubt. A reader written to this section consumes all
 four byte for byte and ends on the last byte of each *(measured, v0.2)*. What a
@@ -912,21 +917,27 @@ Stale memory in the header shows what wrote these files. Note 1.0 Beta 2 is a
 So the writer was built with Microsoft C and, like Note, never cleared its
 header buffer. The far pointers of §10.3 fit a 16-bit heap. None of this
 identifies the program. It rules out Note, and it agrees with the report that
-version 0.2 lived inside other software.
+version 0.2 lived inside other software, here a game.
 
 ### 10.6 What the files cannot settle
 
-- **How a note sets the playback rate.** Notes on the WAV tracks run 19–35, and
-  `EXPRO1` is played at 24, 23, 24 and 26. The natural model is equal
-  temperament from a reference note at which a sample plays at its own rate.
-  That reference is not in the files. Note 24, a C, is the tracker convention,
-  and the explosion's 24/23/24/26 suits it, but that is a guess. `SF02` is the
-  one clearly pitched sample, at about 136.2 Hz at its own rate. That is some 30
+- **How a note sets the playback rate — settled by ear.** Notes on the WAV
+  tracks run 19–35, and `EXPRO1` is played at 24, 23, 24 and 26. The natural
+  model is equal temperament from a reference note at which a sample plays at
+  its own rate, and that reference is not in the files. `SF02` is the one
+  clearly pitched sample, at about 136.2 Hz at its own rate. That is some 30
   cents from any semitone, so the FM harmony around it cannot pick out a
-  reference either.
-- **Whether a note's end stops the sample.** Every note in `op.sop` outlasts its
-  sample. The one note in `ending.sop` lasts 32 ticks, 2.0 s, against a 2.8 s
-  sample, and nothing shows which of the two ends first.
+  reference either. **Note 24** matches the game *(by ear)*: it is a C, where a
+  tracker plays a sample as recorded, and it plays `EXPRO1` at its own rate
+  three times out of four.
+- **Whether a note's end stops the sample — decided, not settled.** Every note
+  in `op.sop` outlasts its sample at note 24's reference. The one note in
+  `ending.sop` is note 19, 32 ticks long: 2.0 s, against the 3.7 s its sample
+  runs five semitones down. Nothing in the file shows which of the two ends
+  first, and the game cannot either: its ending cutscene is over before the
+  music is. This library takes **the note's length as how long its sample
+  plays**. That is a judgement, not evidence: it is the reading under which a
+  note's length means anything at all on a WAV track.
 - **What volume, pitch and the byte-38 field do to a sample.** Volumes on WAV
   tracks are 96 and 127, and pitch is always 100.
 - **The direction of panning** (§10.4).
@@ -939,10 +950,30 @@ instrument comes back with `pcm`: its `rate`, its `period`, and its signed
 stored offset is not consulted. Its `data` is every byte the record stores
 after the names. In a version-0.1 file, type 11 is still a parse error (§3.1).
 
-Mode-3 tracks are parsed but **not played**. This library's chips are FM chips
-and it has no sample voice, so the WAV tracks are silent and only the FM part
-of the song sounds. The samples are in the song's instruments for a player
-that mixes them.
+Mode-3 tracks are **played on sample voices**, one voice per track, mixed into
+the chip's output at the chip's own rate. A full-scale sample is as loud as
+one full-level operator, and volume follows the driver's law for a carrier at
+full level, so 96 is 12 dB down on a sample exactly as on an FM voice. Global
+volume scales both alike. A WAV track's pitch event becomes cents about its
+note. Its instrument event selects a sample; the FM slot every known WAV track
+selects at tick 0 loads nothing, and the voice keeps what it had. A note struck
+while the last one's sample still plays restarts the sample.
+
+The two playback questions of §10.6 are **settings**. `sampleReference` is the
+note at which a sample plays at its recorded rate, each semitone away from it a
+twelfth of an octave. A version-0.2 SOP starts at **24** *(by ear)*, and null
+plays every note at the recorded rate. `sampleCut` stops a sample when its
+note ends. A version-0.2 SOP starts with it **on**, the judgement of §10.6,
+and off lets every sample play to its own end. `iyagi-render` takes them as
+`--sample-ref=N`, and `--sample-cut` or `--sample-ring`.
+
+**A sample left to ring can outlive the song.** The song ends one tick after
+its last event, and with `sampleCut` off a sample struck near that point can
+still be playing: `ending.sop`'s explosion would run 0.27 s past it. The
+player then keeps rendering, chip and samples, until the last sample has run
+out, and reads no further events. Song time stops at the end, so `position`
+does not overshoot `duration`. With `sampleCut` on, as by default, a sample
+stops with its note, which is always before the end.
 
 Version-0.2 pans are read about 64 and split by thirds into the OPL3's three
 settings: 0–42 left, 43–84 both, 85–127 right. Taking MIDI's direction is a

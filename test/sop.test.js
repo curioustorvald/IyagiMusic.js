@@ -8,9 +8,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { IyagiMusic, parseSop, sopPatch, identify } from "../src/player.js";
 import { sopSequence, sopTempo, NOTE_ON, NOTE_OFF, PATCH, PAN, VOLUME, TEMPO } from "../src/sequencer.js";
-import { PAN_NONE, PAN_CENTRE } from "../src/opl/constants.js";
+import { PAN_NONE, PAN_CENTRE, PAN_LEFT } from "../src/opl/constants.js";
 import { FormatError } from "../src/formats.js";
 import { AdlibDriver } from "../src/driver.js";
+import { PcmMixer, pcmVolumeGain } from "../src/pcm.js";
+import { NATIVE_RATE } from "../src/opl/constants.js";
 
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
 const MEGA = path.join(CORPUS, "IMS_FILE_MEGA_CORPUS");
@@ -189,8 +191,9 @@ test("a version-0.2 SOP reads its twenty-four tracks and its PCM instruments", (
   assert.throws(() => parseSop(old), /unknown instType 11/);
 });
 
-test("a version-0.2 WAV track is not played on the FM chip, and 64 pans to the centre", () => {
-  // §10.2: mode 3 plays samples, so none of its notes may reach an OPL voice.
+test("a version-0.2 WAV track plays on a sample voice, not the FM chip, and 64 pans to the centre", () => {
+  // §10.2: mode 3 plays samples, so none of its notes may reach an OPL voice;
+  // they go to sample voice 0, the first WAV track's.
   // §10.4: 64 is the middle of version 0.2's pan scale. Read as version 0.1
   // it would clear both output bits and silence the channel.
   const chanMode = [...new Array(20).fill(2), 3, 3, 3, 3];
@@ -205,8 +208,115 @@ test("a version-0.2 WAV track is not played on the FM chip, and 64 pans to the c
     instruments: [MELODY, pcmInstrument("BOOM", [0, 1, 2], 11025, at)],
   }));
   const seq = sopSequence(song, { melodicVoices: 18, rhythmBase: 18, fourOpPairs: [] });
-  assert.deepEqual(seq.filter((e) => e.type === NOTE_ON).map((e) => e.note), [60]);
-  assert.deepEqual(seq.filter((e) => e.type === PAN).map((e) => e.pan), [PAN_CENTRE]);
+  const on = seq.filter((e) => e.type === NOTE_ON);
+  assert.deepEqual(on.filter((e) => !e.pcm).map((e) => e.note), [60]);
+  assert.deepEqual(on.filter((e) => e.pcm).map((e) => [e.voice, e.note]), [[0, 24]]);
+  assert.deepEqual(seq.filter((e) => e.type === PAN).map((e) => [!!e.pcm, e.pan]),
+    [[false, PAN_CENTRE], [true, PAN_CENTRE]]);
+  // The FM slot selected on the WAV track is not a sample and loads nothing;
+  // the PCM slot is.
+  assert.deepEqual(seq.filter((e) => e.type === PATCH && e.pcm).map((e) => e.sample.rate), [11025]);
+});
+
+test("the sample mixer plays a sample at the rate it is told, and stops at its end", () => {
+  // A ramp, so where the mixer is in the sample can be read off its output.
+  const ramp = { samples: Int8Array.from({ length: 101 }, (_, i) => i), rate: NATIVE_RATE };
+  const m = new PcmMixer(2);
+  m.setSample(0, ramp);
+  m.setVolume(0, 127);
+  m.trigger(0, NATIVE_RATE / 2);                  // half speed: two outputs a sample
+  const out = new Float32Array(300);
+  m.mix(out, null, 0, out.length);
+  const unit = 0.5 / 128;                          // one step of a full-scale sample
+  assert.ok(Math.abs(out[20] - 10 * unit) < 1e-7, "sample 10 at output 20");
+  assert.ok(Math.abs(out[21] - 10.5 * unit) < 1e-7, "interpolated between them");
+  assert.equal(out[250], 0, "silent past the end");
+  assert.equal(m.active, false);
+
+  // Volume follows the driver's carrier law: 96 is sixteen 0.75 dB steps down.
+  assert.equal(pcmVolumeGain(127), 1);
+  assert.ok(Math.abs(20 * Math.log10(pcmVolumeGain(96)) + 12) < 1e-9);
+  assert.equal(pcmVolumeGain(0), 0);
+
+  // A centred voice is in both buses at full level; a left one only in the left.
+  const L = new Float32Array(8), R = new Float32Array(8);
+  m.setSample(1, ramp); m.setVolume(1, 127); m.setPan(1, PAN_LEFT);
+  m.trigger(1, NATIVE_RATE);
+  m.mix(L, R, 0, 8);
+  assert.ok(L[5] > 0 && R[5] === 0);
+});
+
+test("a sample voice's rate comes from the reference note, and its note-off obeys sampleCut", () => {
+  const chanMode = [...new Array(20).fill(2), 3, 3, 3, 3];
+  const tracks = chanMode.map(() => []);
+  const at = 76 + 24;
+  // Two notes a semitone apart, 8 ticks each, 16 ticks apart; a long sample.
+  tracks[20] = [{ delta: 0, code: 6, value: 0 }, { delta: 0, code: 4, value: 127 },
+    { delta: 0, code: 2, value: 24, length: 8 }, { delta: 16, code: 2, value: 25, length: 8 }];
+  const long = new Array(40000).fill(0).map((_, i) => (i % 64) - 32);
+  const song = parseSop(buildSop({
+    version: 2, percussive: 0, chanMode, tracks,
+    instruments: [pcmInstrument("LONG", long, 11025, at)],
+  }));
+  const make = () => new IyagiMusic({ song: buildSop({
+    version: 2, percussive: 0, chanMode, tracks,
+    instruments: [pcmInstrument("LONG", long, 11025, at)],
+  }), sampleRate: 48000 });
+  assert.equal(song.tracks[20].events.length, 4);
+
+  // Run a player to a tick and read the sample voice's step off the mixer.
+  const stepAt = (m, seconds) => {
+    m.renderAll(seconds);
+    return m.sequencer.pcm.voices[0].step * NATIVE_RATE;
+  };
+  const tick = 60 / (sopTempo(120, 8) * 8);        // seconds per tick
+  // §10.6: a version-0.2 SOP starts with note 24 as the reference.
+  let m = make();
+  assert.equal(m.sampleVoiceCount, 4);
+  assert.equal(m.sampleReference, 24);
+  assert.ok(Math.abs(stepAt(m, 4 * tick) - 11025) < 1e-6, "note 24: the recorded rate");
+  m = make();
+  assert.ok(Math.abs(stepAt(m, 20 * tick) - 11025 * 2 ** (1 / 12)) < 1e-6, "note 25 against 24");
+  m = make(); m.sampleReference = null;
+  assert.ok(Math.abs(stepAt(m, 20 * tick) - 11025) < 1e-6, "null: every note as recorded");
+  m = make(); m.sampleReference = 36;
+  assert.ok(Math.abs(stepAt(m, 4 * tick) - 11025 / 2) < 1e-6, "an octave under the reference");
+
+  // §10.6: by default a version-0.2 sample stops with its 8-tick note;
+  // without sampleCut it outlives it.
+  m = make();
+  assert.equal(m.sampleCut, true);
+  m.renderAll(12 * tick);
+  assert.equal(m.sequencer.pcm.voices[0].playing, null);
+  m = make(); m.sampleCut = false; m.renderAll(12 * tick);
+  assert.equal(m.sequencer.pcm.voices[0].playing !== null, true);
+});
+
+test("a sample left to ring outlives the song's end, and one its note cuts does not", () => {
+  // Nothing on any track but one sample, one tick long, at tick 8. The song's
+  // END is the tick after its note-off; the sample is half a second.
+  const chanMode = [...new Array(20).fill(2), 3, 3, 3, 3];
+  const tracks = chanMode.map(() => []);
+  tracks[20] = [{ delta: 0, code: 6, value: 0 }, { delta: 8, code: 2, value: 24, length: 1 }];
+  const half = new Array(Math.round(11025 / 2)).fill(0).map((_, i) => ((i * 7) % 60) - 30);
+  const bytes = buildSop({
+    version: 2, percussive: 0, chanMode, tracks,
+    instruments: [pcmInstrument("TAIL", half, 11025, 76 + 24)],
+  });
+  const tick = 60 / (sopTempo(120, 8) * 8);
+  const endSeconds = 10 * tick;                    // note-off at 9, END at 10
+
+  const ring = new IyagiMusic({ song: bytes, sampleRate: 48000, sampleCut: false });
+  const rung = ring.renderAll(10).length / 48000;
+  assert.ok(rung >= 8 * tick + 0.5 - 0.01, `the sample plays out (${rung} s)`);
+  assert.ok(ring.ended);
+  // Song time is banked in whole chip samples, so it lands within one of it.
+  assert.ok(Math.abs(ring.position - ring.duration) < 2 / 49716,
+    `song time stops at the end (${ring.position} against ${ring.duration})`);
+
+  const cut = new IyagiMusic({ song: bytes, sampleRate: 48000 });
+  const short = cut.renderAll(10).length / 48000;
+  assert.ok(short < endSeconds + 0.1, `cut ends with the song (${short} s)`);
 });
 
 test("a control-track code on a sequenced track is read, and played as Note plays it", () => {
@@ -560,6 +670,9 @@ test("the four version-0.2 files parse to their last byte and play their FM part
       assert.equal(pans.filter((v) => v !== 64).length, fn === "op.sop" ? 2 : 0, fn);
 
       const m = new IyagiMusic({ song: b, sampleRate: 48000 });
+      assert.equal(m.sampleVoiceCount, 4, fn);
+      const pcmNotes = sopSequence(s).filter((e) => e.pcm && e.type === NOTE_ON).length;
+      assert.equal(pcmNotes, { "ending.sop": 1, "op.sop": 8 }[fn] ?? 0, fn);
       if (fn === "mute.sop") continue;                   // one note, at volume 0
       const pcm = m.renderAll(6);
       const rms = Math.sqrt(pcm.reduce((n, v) => n + v * v, 0) / pcm.length);

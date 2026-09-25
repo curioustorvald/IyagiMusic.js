@@ -4,6 +4,13 @@
 // a checkout. Usage:  iyagi-render song.ims [bank.bnk] [out.wav] [seconds]
 // A .sop embeds its own instruments, so pass "" where the bank would go.
 //
+// Two options reach a version-0.2 SOP's sample voices, whose rules were
+// settled by ear and by judgement rather than read from anything (SOP §10.6):
+//   --sample-ref=N   note N plays a sample at its recorded rate; 24 unless
+//                    given. --sample-ref=native plays every note at it
+//   --sample-ring    let a sample play to its own end; by default it stops
+//                    when its note does (--sample-cut says so explicitly)
+//
 // The WAV is stereo when the chip is -- a .sop plays on a YMF262 and can pan
 // (SOP §4.2) -- and mono otherwise, because writing the same samples twice
 // would double the file for nothing.
@@ -11,15 +18,30 @@ import fs from "node:fs";
 import path from "node:path";
 import { IyagiMusic } from "../src/player.js";
 
-const [song, bank, out = "out.wav", seconds = "30"] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const flags = args.filter((a) => a.startsWith("--"));
+const [song, bank, out = "out.wav", seconds = "30"] = args.filter((a) => !a.startsWith("--"));
+const USAGE = "usage: iyagi-render <song.ims|.rol|.sop> [bank.bnk] [out.wav] [seconds]"
+  + " [--sample-ref=N|native] [--sample-cut|--sample-ring]";
+/** @type {number|null|undefined} undefined leaves the format's own default */
+let sampleReference;
+/** @type {boolean|undefined} likewise */
+let sampleCut;
+for (const f of flags) {
+  const ref = /^--sample-ref=(native|-?\d+)$/.exec(f);
+  if (ref) sampleReference = ref[1] === "native" ? null : Number(ref[1]);
+  else if (f === "--sample-cut") sampleCut = true;
+  else if (f === "--sample-ring") sampleCut = false;
+  else { console.error(`unknown option ${f}\n${USAGE}`); process.exit(1); }
+}
 if (!song) {
-  console.error("usage: iyagi-render <song.ims|.rol|.sop> [bank.bnk] [out.wav] [seconds]");
+  console.error(USAGE);
   process.exit(1);
 }
 const read = (p) => (p && fs.existsSync(p) ? new Uint8Array(fs.readFileSync(p)) : undefined);
 const rate = 48000;
 const m = new IyagiMusic({
-  song: read(song), bank: read(bank), sampleRate: rate,
+  song: read(song), bank: read(bank), sampleRate: rate, sampleReference, sampleCut,
 });
 
 const channels = m.stereo ? 2 : 1;
@@ -64,4 +86,8 @@ fs.writeFileSync(out, buf);
 console.log(`${path.basename(song)}  "${m.title.trim()}"  ->  ${out}`
   + `  (${(frames / rate).toFixed(1)}s, ${m.chipKind.toUpperCase()},`
   + ` ${channels === 2 ? "stereo" : "mono"}`
+  + (m.sampleVoiceCount
+    ? `, ${m.sampleVoiceCount} sample voices at ${m.sampleReference === null ? "native rate" : `ref ${m.sampleReference}`}`
+      + (m.sampleCut ? ", cut at note end" : ", ringing to sample end")
+    : "")
   + (m.missing.length ? `, ${m.missing.length} patch(es) missing)` : ")"));
