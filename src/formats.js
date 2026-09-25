@@ -31,6 +31,14 @@ const SOP_INST_NAME_SIZE = 28;
  */
 const SOP_INST_DATA_SIZE = { 0: 22, 1: 11, 2: 11, 6: 11, 7: 11, 8: 11, 9: 11, 10: 11, 12: 0 };
 /**
+ * SOP §10.3: a version-0.2 PCM instrument (type 11) has nineteen bytes of head
+ * after the names, and then its samples. Its size is not fixed, so it is not
+ * in the table above; and Note has no record for type 11 at all, so a
+ * version-0.1 file that holds one is still an error.
+ */
+const SOP_PCM_HEAD_SIZE = 19;
+const SOP_PCM = 11;
+/**
  * SOP §4.2 and §5: value bytes following the event code, on any track. This is
  * NOTE.EXE's reader, which knows codes 1..8 on every track alike. The corpus
  * keeps the control track's codes (3, 8) and the sequenced tracks' apart, but
@@ -183,10 +191,24 @@ export class FormatError extends Error {}
  * operator -- so `sopPatch` is what turns one into something the driver takes.
  * SOP §3.1.
  * @typedef {object} SopInstrument
- * @property {number} type 0 four-op, 1 two-op melody, 6..10 rhythm, 12 comment
+ * @property {number} type 0 four-op, 1 two-op melody, 6..10 rhythm, 11 PCM
+ *   (version 0.2 only), 12 comment
  * @property {string} shortName bank instrument name; `char[8]`, often unterminated
  * @property {string} longName display name -- or, for type 12, the comment line
- * @property {Uint8Array} data 22, 11 or 0 packed register bytes
+ * @property {Uint8Array} data 22, 11 or 0 packed register bytes; for type 11,
+ *   every byte the record stores after its names, head and samples alike
+ * @property {SopPcm} [pcm] type 11 only
+ */
+
+/**
+ * The sample a version-0.2 PCM instrument carries. SOP §10.3. The head's other
+ * fields -- a constant 64, three zero bytes, and a far pointer into the memory
+ * of whatever wrote the file -- are left in `data`, since nothing is known to
+ * read them.
+ * @typedef {object} SopPcm
+ * @property {number} rate sample rate, Hz
+ * @property {number} period floor(3579545 / rate), as stored
+ * @property {Int8Array} samples signed 8-bit mono
  */
 
 /**
@@ -200,9 +222,10 @@ export class FormatError extends Error {}
  */
 
 /**
- * One of a SOP's twenty tracks. SOP §4.1.
+ * One of a SOP's tracks. SOP §4.1.
  * @typedef {object} SopTrack
- * @property {number} mode channel mode, masked to 0..2; SOP §2
+ * @property {number} mode channel mode with bit 7 masked off: 0..2, or 3 for a
+ *   version-0.2 WAV track; SOP §2, §10.2
  * @property {number} modeRaw the byte as stored -- bit 7 is undocumented, SOP §2
  * @property {SopEvent[]} events
  */
@@ -210,13 +233,14 @@ export class FormatError extends Error {}
 /**
  * A SOP song -- the format the "Note" editor wrote, magic `sopepos`. SOP §1.
  * @typedef {object} SopSong
- * @property {number[]} version major and minor; only 0.1 exists
+ * @property {number[]} version major and minor: 0.1, or 0.2 outside the corpus (SOP §10)
  * @property {string} fileName what it was saved as, which is not always its own name
  * @property {string} title already Johab-decoded
  * @property {boolean} percussive
  * @property {number} tickBeat @property {number} beatMeasure @property {number} basicTempo
  * @property {SopInstrument[]} instruments
- * @property {SopTrack[]} tracks always twenty; SOP §1
+ * @property {SopTrack[]} tracks `nTracks` of them: twenty, or twenty-four in
+ *   version 0.2; SOP §1, §10
  * @property {SopEvent[]} control tempo and global volume only; SOP §5
  * @property {string[]} comments the type-12 instruments' text, in file order; SOP §6
  */
@@ -671,6 +695,8 @@ function addRun(runs, from, to) {
  * Everything after the 76-byte header is positional -- channel modes, then
  * instruments, then twenty tracks, then the control track, with no offsets
  * anywhere -- so this has to be read strictly in order, the way a ROL does.
+ * Version 0.2 (§10) is the same walk with the header's track count believed:
+ * twenty-four modes and tracks, and PCM instruments with their samples inline.
  * The upside is that the file has to end exactly where the control track does,
  * which is a strong check that nothing was misread: all 336 corpus files land
  * on the last byte.
@@ -709,9 +735,16 @@ export function parseSop(data, options) {
   o += nTracks;
   if (o > b.length) throw new FormatError("SOP channel-mode table truncated");
 
+  // §10: version 0.2 is the only one known to carry PCM instruments.
+  const hasPcm = b[7] > 0 || b[8] >= 2;
   for (let i = 0; i < b[74]; i++) {
     if (o + SOP_INST_NAME_SIZE > b.length) throw new FormatError("SOP instrument truncated");
     const type = b[o];
+    if (type === SOP_PCM && hasPcm) {
+      song.instruments.push(sopPcmInstrument(b, dv, o, i, options));
+      o += SOP_INST_NAME_SIZE + song.instruments[i].data.length;
+      continue;
+    }
     const size = SOP_INST_DATA_SIZE[type];
     if (size === undefined) {
       throw new FormatError(`SOP instrument ${i}: unknown instType ${type}`);
@@ -772,6 +805,33 @@ export function parseSop(data, options) {
   return song;
 }
 
+/**
+ * One version-0.2 PCM instrument, starting at `o`. SOP §10.3.
+ *
+ * The head stores the samples' file offset as well as their length, and in
+ * every known file the offset is simply where the head ends. The walk is what
+ * this reader trusts, as it does everywhere else in a SOP: the samples are
+ * taken from right after the head, and the stored offset is not consulted.
+ */
+function sopPcmInstrument(b, dv, o, i, options) {
+  const head = o + SOP_INST_NAME_SIZE;
+  if (head + SOP_PCM_HEAD_SIZE > b.length) throw new FormatError(`SOP instrument ${i}: PCM head truncated`);
+  const length = dv.getUint16(head + 4, true);
+  const start = head + SOP_PCM_HEAD_SIZE;
+  if (start + length > b.length) throw new FormatError(`SOP instrument ${i}: PCM samples truncated`);
+  return {
+    type: SOP_PCM,
+    shortName: text(b, o + 1, 8, options),
+    longName: text(b, o + 9, 19, options),
+    data: b.subarray(head, start + length),
+    pcm: {
+      rate: dv.getUint16(head + 8, true),
+      period: dv.getUint16(head + 6, true),
+      samples: new Int8Array(b.buffer, b.byteOffset + start, length),
+    },
+  };
+}
+
 /** Unpack one operator's five register bytes into a bank operator. SOP §3.2. */
 function sopOperator(char, scale, attackDecay, sustainRelease, feedback) {
   return {
@@ -820,8 +880,8 @@ function sopPair(name, d, at, singleOp) {
 
 /**
  * Turn a SOP instrument into the shape a BNK patch has, so that the driver can
- * load it. Returns null for a comment (type 12) and for anything whose data
- * the file cut short.
+ * load it. Returns null for a comment (type 12), for a PCM sample (type 11),
+ * and for anything whose data the file cut short.
  *
  * A four-operator instrument (type 0) is two of these back to back, and comes
  * back as a patch carrying its second pair in `pair`. What happens to that pair
@@ -834,7 +894,8 @@ function sopPair(name, d, at, singleOp) {
  */
 export function sopPatch(inst) {
   const d = inst.data;
-  if (inst.type === 12 || d.length < 11) return null;
+  // §10.3: a PCM instrument's bytes are a sample, not registers.
+  if (inst.type === 12 || inst.type === SOP_PCM || d.length < 11) return null;
   const singleOp = inst.type >= 7 && inst.type <= 10;
   const patch = sopPair(inst.shortName, d, 0, singleOp);
   // §3.3: the second pair sits at register offsets 0x08/0x0B with its own

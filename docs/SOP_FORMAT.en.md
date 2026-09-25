@@ -17,7 +17,7 @@ update notes, and it is the version studied here. Two earlier betas (1995.2,
 | | |
 |---|---|
 | Magic | `sopepos` at offset 0, seven bytes, no terminator |
-| Version | 0.1, and only 0.1 |
+| Version | 0.1; four files outside the corpus are 0.2 (§10) |
 | Chip | **YMF262 (OPL3)** — twenty voices, four-operator instruments, stereo |
 | Integers | little-endian |
 | Text | 7-bit ASCII, or Korean 2-byte Johab; see `JOHAB_ENCODING.en.md` |
@@ -60,7 +60,10 @@ source of its test player, `TS.C`, which §4.3 quotes.
 
 One file from outside the corpus is cited: `MUSIC1.SOP`, given to this study
 privately, with the warning that a bug in it kept it from opening. §4.3 is
-what it turned out to be. It is not counted in any *(measured)* figure. A Vogons thread and
+what it turned out to be. It is not counted in any *(measured)* figure. Four more files from
+outside the corpus are version 0.2, the only ones of that version this study
+has seen. §10 is about them, and a claim marked *(measured, v0.2)* was checked
+on those four alone. A Vogons thread and
 SudoMaker's `adlib2vgm` were **not** consulted.
 
 ## 1. Header (76 bytes)
@@ -73,7 +76,7 @@ block**, reads it back as one, and writes it with a single call
 |-----|------|------|-------|
 | 0 | `char[7]` | signature | `sopepos` *(measured: 336/336)* |
 | 7 | `u8` | majorVersion | always 0 *(measured)* |
-| 8 | `u8` | minorVersion | always 1 *(measured)* |
+| 8 | `u8` | minorVersion | always 1 *(measured)*; 2 in version 0.2 (§10) |
 | 9 | `u8` | padding | always 0 *(measured)* |
 | 10 | `char[13]` | fileName | the name it was saved under — **not always its own**, see below |
 | 23 | `char[31]` | title | NUL-terminated, at most 30 characters; Johab in 80 of 336 files *(measured)* |
@@ -82,7 +85,7 @@ block**, reads it back as one, and writes it with a single call
 | 58 | `u8` | beatMeasure | beats per bar; 4 in 322 of 336 *(measured)* |
 | 59 | `u16` | basicTempo | **always written as 120 and never read** *(NOTE.EXE)*; see below |
 | 61 | `u8[12]` | — | never written — stale bytes, see below |
-| 73 | `u8` | nTracks | **always 20** *(measured)*; see §4.1 |
+| 73 | `u8` | nTracks | **always 20** *(measured)*; see §4.1. 24 in version 0.2 (§10) |
 | 74 | `u16` | nInsts | instruments *and* comment lines; up to 128 *(measured)* |
 
 **The magic is seven bytes, and bytes 7–9 are three separate fields.** Note
@@ -146,7 +149,9 @@ of 336, could not be reproduced by this revision. `parseSop` exposes none of
 it, and a writer should zero it.
 
 **`nTracks` is written as the constant 20 and never read** *(NOTE.EXE)*: the
-loader always reads twenty tracks and a control track.
+loader always reads twenty tracks and a control track. Version 0.2 is where
+the field starts to mean something: it is 24 there, and the mode table and the
+tracks follow it (§10).
 
 Everything after the header is positional — channel modes, instruments, twenty
 tracks, control track, with no offset table anywhere — so a SOP has to be read
@@ -158,7 +163,7 @@ Ticks become seconds by the usual reading, `ticks per second = bpm × tickBeat �
 60`, which is the same clock `Sequencer` already runs for IMS and ROL. How Note
 itself realises that clock is §5.
 
-## 2. Channel modes — `u8[20]`, at offset 76
+## 2. Channel modes — `u8[nTracks]`, at offset 76
 
 One byte per track, saying what kind of voice it is. The low seven bits are
 the mode; bit 7 is a separate flag.
@@ -168,6 +173,7 @@ the mode; bit 7 is a separate flag.
 | 0 | the upper half of a four-operator pair — see below | 249 |
 | 1 | YMF262 four-operator | 249 |
 | 2 | YM3812 two-operator | 6402 |
+| 3 | a WAV track — version 0.2 only (§10) | 0 |
 | bit 7 | **channel disabled in the editor** *(NOTE.EXE)* | 40, all on mode 2 |
 
 **Bit 7 is the editor's "연주 불가능" (do not play) switch.** Alt-F1…F10 and
@@ -229,7 +235,9 @@ The label is what the instrument box shows between the two names
 types 3, 4 and 5 blank, but none of the four has a record size: Note's reader
 reads no data bytes for them and its writer writes **no record at all**, while
 still counting it in `nInsts` *(NOTE.EXE)*. A file holding one could not have
-come out of Note intact, so an unknown type is still a parse error.
+come out of Note intact, so in a version-0.1 file an unknown type is still a
+parse error. Version 0.2 gives type 11 a record, with its samples inline
+(§10.3).
 
 Type 2 is a real type with nowhere to come from. Note's instrument loader
 treats it exactly as type 1 *(NOTE.EXE)*; what "1OP" was meant to mean is not
@@ -601,9 +609,12 @@ the corpus; §4.3 has the one file outside it that breaks it), and the ±100
 reading of pitch.
 
 Park Jin-hong's memo, the likely source of the wiki, gets the event and
-instrument layouts right but several header offsets wrong (it puts
-`beatMeasure` at 0x40 rather than 0x3A, and gives the header a size that varies
-with the track count, where the program always writes 96 bytes). Its pitch
+instrument layouts right but puts `beatMeasure` at 0x40 rather than 0x3A. It
+also says the header's size varies with the track count, and reads the count
+from 0x49 and that many mode bytes from 0x4C; `TS.C` does the same. Earlier
+revisions called that an error, because Note always writes 96 bytes. It is not
+one: it is exactly how version 0.2 is laid out (§10), and a reader written to
+the memo would have found its instruments in the right place. Its pitch
 description — the bend interpolates between this note's frequency and the
 next one's, by percent — is the right model; Note implements it with the AdLib
 driver's 25-step table (§4.2).
@@ -761,3 +772,180 @@ shrink to nothing keeps one tick, and an event that would land on the same tick
 as an earlier event of the same kind is pushed one tick later *(NOTE.EXE)*. The
 IMS import uses the same routine. None of the eleven matched ports shows any
 sign of it, which suggests the scene left `tickBeat` where the import put it.
+
+## 10. Version 0.2 — four WAV tracks
+
+Four files outside the corpus say version **0.2**: `ending.sop`, `ending03.sop`,
+`mute.sop` and `op.sop`. They came to this study in one archive, beside six
+ordinary version-0.1 files (`ANT_*.SOP`), and version 0.2 is reportedly the
+format of a SOP library that was only ever used embedded in other programs. No
+program that reads it has been found. HTS refuses anything but 0.1 (§1), and so
+do `TS.C` and roboplay's `sop.c`; NOTE.EXE has no record size for the new
+instrument type (§3.1), and `SOPPLAY.EXE` names no wave-output function at all.
+So everything below is read from the four files alone. A claim marked
+*(measured, v0.2)* holds for all four, and none of the four is counted in any
+other *(measured)* figure.
+
+The structure is not in doubt. A reader written to this section consumes all
+four byte for byte and ends on the last byte of each *(measured, v0.2)*. What a
+player should do with the new parts is less certain, and §10.6 lists what the
+files cannot settle.
+
+### 10.1 What changed
+
+| | 0.1 | 0.2 *(measured, v0.2)* |
+|---|---|---|
+| byte 8, minorVersion | 1 | **2** |
+| byte 73, nTracks | 20 | **24** |
+| channel-mode table | 20 bytes; instruments at 96 | 24 bytes; instruments at **100** |
+| track modes | 0, 1, 2 | 2 on tracks 0–19, **3** on tracks 20–23 |
+| instrument types | 0–2, 6–10, 12 | adds **11**, PCM, with inline samples |
+| panning | 0, 1, 2 | **centred on 64** |
+
+Everything else is as in version 0.1: the header's other offsets, the records
+of the other instrument types, the track layout, the event codes and their
+value sizes, and the control track. Bytes 9, 22, 53, 60 and 75 are 0, as
+Note writes them. `basicTempo` is 120, `percussive` is 1, and `tickBeat` is 8,
+8, 4 and 12. Byte 23 is NUL in all four, so **no file has a title**. Behind
+that NUL, and in bytes 61–72, is stale memory, as in version 0.1; §10.5 reads
+it.
+
+So a version-0.2 file is what §1's `nTracks` would describe if it were read
+rather than assumed. The track count is the one field that changes the layout,
+and it changes it only by moving the instruments four bytes on and adding four
+tracks before the control track.
+
+### 10.2 Tracks 20–23 — mode 3
+
+The four new tracks carry mode 3 in all four files, and no other track does
+*(measured, v0.2)*. They have the same layout as the other tracks and use the
+same event codes, 2, 4, 5, 6 and 7. A WAV track sounds a note only after
+selecting a type-11 instrument. The other tracks never select one
+*(measured, v0.2)*.
+
+Only `ending.sop` and `op.sop` play anything on them: nine notes, pitches 19–35,
+24 to 48 ticks long. In `ending03.sop` and `mute.sop` the four tracks hold only
+their tick-0 settings. The tracks are separate voices. At tick 440 of `op.sop`,
+tracks 21 and 22 are both sounding `EXPRO1`.
+
+### 10.3 The PCM instrument — type 11
+
+A type-11 record is the usual 28-byte head, 19 more bytes, and then the
+samples, with nothing between it and the next record:
+
+| Off | Type | Name | Notes *(measured, v0.2: six records)* |
+|-----|------|------|------|
+| 0 | `u8` | instType | 11 |
+| 1 | `char[8]` | shortName | the sample's base name |
+| 9 | `char[19]` | longName | see below |
+| 28 | `u32` | dataOffset | **absolute file offset of the samples**; always this record's offset + 47 |
+| 32 | `u16` | length | sample bytes, 5156–30832 |
+| 34 | `u16` | period | ⌊3 579 545 ÷ rate⌋: 324 at 11 025 Hz, 444 at 8050 Hz |
+| 36 | `u16` | rate | Hz; 11 025 in five records, 8050 in one |
+| 38 | `u16` | — | 64 in all six |
+| 40 | `u8[3]` | — | 0 in all six |
+| 43 | `u32` | — | a far pointer, `segment:0004`; stale, see below |
+| 47 | `s8[length]` | samples | signed 8-bit mono |
+
+**`length` is certain.** In each record, the next record, or track 0 for the
+last one, starts exactly `length` bytes after byte 47. `dataOffset` says the
+same thing a second way. Neither of them needs the other, and they agree in all
+six records.
+
+**`period` is the rate put another way.** 3 579 545 Hz is the NTSC colour-burst
+frequency. It is also the Amiga's NTSC Paula clock, which is how a MOD player
+turns a period into a rate, and the YM3812's master clock. Which of these the
+writer meant is not recorded. Since the rate is stored beside it, a player needs
+only one of the two.
+
+**The 64 at 38** is the top of the MOD volume scale, 0–64, which makes it a
+plausible default volume. Nothing in the files varies it, so that reading is
+untested. Bytes 40–42 might be loop fields. Every sample here is a one-shot, so
+they cannot be tested either.
+
+**The far pointer at 43 is the writer's memory, not the file's.** Its offset
+word is 4 in all six records, which is what a 16-bit DOS heap block looks like.
+In `op.sop` the segments rise in record order, and each step is the previous
+sample's length in 16-byte paragraphs plus five or six. It is the address the
+sample had when the file was saved, and a reader should ignore it.
+
+**The samples are signed.** Read as signed bytes, every sample is two to four
+times smoother, sample to sample, than read as unsigned. The one exception is
+the first 18 bytes of `EXPRO1`, the 8050 Hz sample: they are 0x7F–0x84, which is
+unsigned silence. Read signed, that is a full-scale negative pulse of about two
+milliseconds, a click at the start.
+
+**`longName` is a file name.** Its first eight bytes are the start of a DOS file
+name with the dot turned into a NUL: `EF01\0WAV`, `EVER\0WAV`, `SF02\0WAV`,
+`SF\0WAV`, `EXPRO1\0W`, `EXPLO02\0` *(measured, v0.2)*. The samples were loaded
+from `.WAV` files. `shortName` holds the same base name.
+
+The PCM records come last in both instrument tables, after every FM instrument.
+The only other type used in these files is 1: even the drum tracks 6–10 select
+type-1 instruments, never types 6–10 *(measured, v0.2)*.
+
+### 10.4 Panning
+
+A player that read these pans as version 0.1 would silence nearly every track. There are
+117 pan events in the four files, and 115 of them are **64**. The other two,
+54 on track 6 and 74 on track 19 of `op.sop`, sit ten either side of it
+*(measured, v0.2)*. In version 0.1, 64 is not one of the three values and would
+clear both output bits (§4.2). Here it is plainly the centre. The obvious
+reading is MIDI's 0–127 with 64 in the middle, but the files never go beyond
+54–74, and which end is left is not known.
+
+### 10.5 The writer was not Note
+
+Stale memory in the header shows what wrote these files. Note 1.0 Beta 2 is a
+32-bit PMODE/W program, and this writer was a 16-bit real-mode DOS program:
+
+- In `op.sop` and `ending03.sop`, the title's slack is 16-bit x86 code,
+  `8B EC 83 EC 02 C4 5E 08` (`mov bp,sp; sub sp,2; les bx,[bp+8]`). The two
+  files have the same bytes there and in 61–72, so they were most likely saved
+  in one session.
+- In `ending.sop` it is a table of `CD nn C3` stubs, `int nn; ret`, for
+  interrupts 13h to 23h.
+- In `mute.sop` it is text: `6009␍␊- not enough sp` in the title and
+  `ironment␍` in 61–72, with the bytes between no longer holding it. This is Microsoft C's runtime error R6009, *not enough space for
+  environment*.
+
+So the writer was built with Microsoft C and, like Note, never cleared its
+header buffer. The far pointers of §10.3 fit a 16-bit heap. None of this
+identifies the program. It rules out Note, and it agrees with the report that
+version 0.2 lived inside other software.
+
+### 10.6 What the files cannot settle
+
+- **How a note sets the playback rate.** Notes on the WAV tracks run 19–35, and
+  `EXPRO1` is played at 24, 23, 24 and 26. The natural model is equal
+  temperament from a reference note at which a sample plays at its own rate.
+  That reference is not in the files. Note 24, a C, is the tracker convention,
+  and the explosion's 24/23/24/26 suits it, but that is a guess. `SF02` is the
+  one clearly pitched sample, at about 136.2 Hz at its own rate. That is some 30
+  cents from any semitone, so the FM harmony around it cannot pick out a
+  reference either.
+- **Whether a note's end stops the sample.** Every note in `op.sop` outlasts its
+  sample. The one note in `ending.sop` lasts 32 ticks, 2.0 s, against a 2.8 s
+  sample, and nothing shows which of the two ends first.
+- **What volume, pitch and the byte-38 field do to a sample.** Volumes on WAV
+  tracks are 96 and 127, and pitch is always 100.
+- **The direction of panning** (§10.4).
+
+### 10.7 What this library does
+
+`parseSop` reads a version-0.2 file as this section describes. A type-11
+instrument comes back with `pcm`: its `rate`, its `period`, and its signed
+`samples`, taken from right after the head, where the walk finds them. The
+stored offset is not consulted. Its `data` is every byte the record stores
+after the names. In a version-0.1 file, type 11 is still a parse error (§3.1).
+
+Mode-3 tracks are parsed but **not played**. This library's chips are FM chips
+and it has no sample voice, so the WAV tracks are silent and only the FM part
+of the song sounds. The samples are in the song's instruments for a player
+that mixes them.
+
+Version-0.2 pans are read about 64 and split by thirds into the OPL3's three
+settings: 0–42 left, 43–84 both, 85–127 right. Taking MIDI's direction is a
+choice, since §10.4 cannot settle it, and no known pan reaches either outer
+third, so every pan in the four files plays centred. Read the version-0.1 way,
+64 would silence every channel it touched.

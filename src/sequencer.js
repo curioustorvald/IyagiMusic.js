@@ -476,9 +476,19 @@ function opl2Layout(song) {
  * silences the channel -- and its low nibble is ORed into the channel's
  * feedback and connection until the next patch.
  * @param {number} value
+ * @param {boolean} [centred] a version-0.2 pan, 0..127 about 64 (§10.4)
  * @returns {{pan:number, garble:number}}
  */
-function sopPan(value) {
+function sopPan(value, centred) {
+  // §10.4: version 0.2 pans about a centre of 64. The files never leave 54..74
+  // and do not say which end is left, so this takes MIDI's reading, 0 left and
+  // 127 right, and gives each of the OPL3's three switch settings a third of
+  // the range. Every pan the four known files hold comes out centred.
+  if (centred) {
+    if (value < 43) return { pan: PAN_LEFT, garble: 0 };
+    if (value > 84) return { pan: PAN_RIGHT, garble: 0 };
+    return { pan: PAN_CENTRE, garble: 0 };
+  }
   if (value === 0) return { pan: PAN_RIGHT, garble: 0 };
   if (value === 1) return { pan: PAN_CENTRE, garble: 0 };
   if (value === 2) return { pan: PAN_LEFT, garble: 0 };
@@ -548,6 +558,9 @@ const SOP_DEFAULT_VOLUME = 96;
  * - **Panning is a voice setting**, so it is emitted per voice rather than per
  *   track, and lands wherever the track's notes landed. A mono chip drops it,
  *   except for what a corrupt value does to feedback.
+ * - **Version 0.2's WAV tracks are not here** (§10.2). They play samples, and
+ *   the sequence is for an FM chip; the samples are in the song's
+ *   instruments for whoever mixes them.
  *
  * @param {import("./formats.js").SopSong} song
  * @param {{melodicVoices:number, rhythmBase:number, fourOpPairs:number[][]}} [layout]
@@ -566,8 +579,13 @@ export function sopSequence(song, layout) {
   // Those are numbers the format fixes, not the chip.
   const rhythmVoiceOf = (t) =>
     (percussive && t >= 6 && t < 6 + RHYTHM_VOICES ? rhythmBase + (t - 6) : -1);
-  // §2 and §4.1: which tracks Note plays at all.
-  const plays = (t) => song.tracks[t].mode !== 0 && (percussive || (t !== 9 && t !== 10));
+  // §2 and §4.1: which tracks Note plays at all. §10.2: a version-0.2 WAV
+  // track (mode 3) plays samples, which no OPL voice can, so it is not
+  // sequenced here -- its notes would otherwise sound on whatever FM patch
+  // the track's default slot holds.
+  const plays = (t) => song.tracks[t].mode !== 0 && song.tracks[t].mode !== 3
+    && (percussive || (t !== 9 && t !== 10));
+  const centredPan = song.version[0] > 0 || song.version[1] >= 2;
 
   // §2: hand the four-operator channel pairs to the mode-1 tracks, in track
   // order. Only tracks 0, 1, 2, 11, 12 and 13 can be mode 1, so an OPL3 always
@@ -631,7 +649,7 @@ export function sopSequence(song, layout) {
   /** Panning belongs to the voice, so it is only worth sending when it moves. */
   const emitPan = (tick, voice, t) => {
     if (trackPan[t] < 0 || voicePan[voice] === trackPan[t]) return;
-    const { pan, garble } = sopPan(trackPan[t]);
+    const { pan, garble } = sopPan(trackPan[t], centredPan);
     // A corrupt value damages 0xC0 each time it is written, so it is never
     // "already set".
     voicePan[voice] = garble ? -1 : trackPan[t];

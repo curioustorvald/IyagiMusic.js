@@ -8,7 +8,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { IyagiMusic, parseSop, sopPatch, identify } from "../src/player.js";
 import { sopSequence, sopTempo, NOTE_ON, NOTE_OFF, PATCH, PAN, VOLUME, TEMPO } from "../src/sequencer.js";
-import { PAN_NONE } from "../src/opl/constants.js";
+import { PAN_NONE, PAN_CENTRE } from "../src/opl/constants.js";
 import { FormatError } from "../src/formats.js";
 import { AdlibDriver } from "../src/driver.js";
 
@@ -18,6 +18,22 @@ const have = fs.existsSync(MEGA);
 const sopFiles = () =>
   fs.readdirSync(MEGA).filter((f) => f.toUpperCase().endsWith(".SOP")).sort();
 const read = (fn) => new Uint8Array(fs.readFileSync(path.join(MEGA, fn)));
+// §10: the four version-0.2 files, which are not part of the corpus.
+const V02 = "/home/torvald/Documents/tsvm/reference_materials/sop/extracted";
+const V02_FILES = ["ending.sop", "ending03.sop", "mute.sop", "op.sop"];
+const haveV02 = V02_FILES.every((f) => fs.existsSync(path.join(V02, f)));
+
+/**
+ * How many bytes the parse accounts for: header, mode table, every instrument
+ * record, and every track at four bytes an event, six for a note-on. parseSop
+ * itself does not insist on reaching the last byte, so a test that means "the
+ * walk ends where the file does" has to compare this with the file's length.
+ */
+const sopByteLength = (s) =>
+  76 + s.tracks.length
+  + s.instruments.reduce((n, i) => n + 28 + i.data.length, 0)
+  + [...s.tracks.map((t) => t.events), s.control]
+    .reduce((n, evs) => n + 6 + evs.reduce((m, e) => m + (e.code === 2 ? 6 : 4), 0), 0);
 
 /* ------------------------------------------------------------- synthetic */
 
@@ -27,8 +43,8 @@ const N_TRACKS = 20;
 function buildSop({
   title = "TEST", fileName = "TEST.SOP", percussive = 1, tickBeat = 8,
   beatMeasure = 4, basicTempo = 120, chanMode = new Array(N_TRACKS).fill(2),
-  instruments = [], tracks = new Array(N_TRACKS).fill(null).map(() => []),
-  control = [],
+  instruments = [], tracks = new Array(chanMode.length).fill(null).map(() => []),
+  control = [], version = 1,
 } = {}) {
   const out = [];
   const put = (...b) => out.push(...b);
@@ -40,10 +56,10 @@ function buildSop({
   const u16 = (v) => [v & 0xff, (v >> 8) & 0xff];
   const u32 = (v) => [v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >>> 24) & 0xff];
 
-  put(..."sopepos".split("").map((c) => c.charCodeAt(0)), 0, 1, 0);
+  put(..."sopepos".split("").map((c) => c.charCodeAt(0)), 0, version, 0);
   put(...str(fileName, 13), ...str(title, 31));
   put(percussive, 0, tickBeat, 0, beatMeasure, basicTempo);
-  put(...str("", 13), N_TRACKS, instruments.length, 0);
+  put(...str("", 13), chanMode.length, instruments.length, 0);
   put(...chanMode);
   for (const i of instruments) {
     put(i.type, ...str(i.shortName ?? "", 8), ...str(i.longName ?? "", 19), ...(i.data ?? []));
@@ -125,6 +141,72 @@ test("the reader refuses what it cannot account for", () => {
   const tracks = new Array(N_TRACKS).fill(null).map(() => []);
   tracks[0] = [{ delta: 0, code: 9, value: 0 }];
   assert.throws(() => parseSop(buildSop({ tracks })), /unknown event 9/);
+});
+
+/** A version-0.2 PCM record, SOP §10.3, holding `samples` at `rate`. */
+function pcmInstrument(name, samples, rate, at) {
+  const head = [
+    ...[0, 8, 16, 24].map((s) => ((at + 47) >>> s) & 0xff),     // where the samples start
+    samples.length & 0xff, samples.length >> 8,
+    Math.floor(3579545 / rate) & 0xff, Math.floor(3579545 / rate) >> 8,
+    rate & 0xff, rate >> 8,
+    64, 0, 0, 0, 0, 4, 0, 0x53, 0x45,                              // as all six known records
+  ];
+  return { type: 11, shortName: name, longName: name, data: [...head, ...samples.map((v) => v & 0xff)] };
+}
+
+test("a version-0.2 SOP reads its twenty-four tracks and its PCM instruments", () => {
+  // §10: nTracks is believed, so the mode table and the tracks run to 24, and
+  // a type-11 record carries a nineteen-byte head and its samples inline.
+  const chanMode = [...new Array(20).fill(2), 3, 3, 3, 3];
+  const tracks = chanMode.map(() => []);
+  tracks[20] = [{ delta: 0, code: 6, value: 1 }, { delta: 4, code: 2, value: 24, length: 8 }];
+  const at = 76 + 24 + 28 + MELODY.data.length;
+  const samples = [0, 3, -3, 127, -128, 5];
+  const bytes = buildSop({
+    version: 2, chanMode, tracks,
+    instruments: [MELODY, pcmInstrument("BOOM", samples, 11025, at), MELODY],
+  });
+  const song = parseSop(bytes);
+  assert.deepEqual(song.version, [0, 2]);
+  assert.equal(song.tracks.length, 24);
+  assert.deepEqual(song.tracks.slice(19).map((t) => t.mode), [2, 3, 3, 3, 3]);
+  const pcm = song.instruments[1];
+  assert.equal(pcm.type, 11);
+  assert.equal(pcm.shortName, "BOOM");
+  assert.equal(pcm.pcm.rate, 11025);
+  assert.equal(pcm.pcm.period, 324);
+  assert.deepEqual([...pcm.pcm.samples], samples, "the samples are signed");
+  assert.equal(sopPatch(pcm), null, "a sample is no patch");
+  // The record after the samples is found, which is the length being right.
+  assert.equal(song.instruments[2].shortName, "PIANO");
+  assert.deepEqual(song.tracks[20].events.map((e) => [e.tick, e.code, e.value]), [[0, 6, 1], [4, 2, 24]]);
+  assert.equal(sopByteLength(song), bytes.length);
+
+  // §3.1: Note has no record for type 11, so a version-0.1 file with one is
+  // still unreadable.
+  const old = buildSop({ instruments: [pcmInstrument("BOOM", samples, 11025, 96)] });
+  assert.throws(() => parseSop(old), /unknown instType 11/);
+});
+
+test("a version-0.2 WAV track is not played on the FM chip, and 64 pans to the centre", () => {
+  // §10.2: mode 3 plays samples, so none of its notes may reach an OPL voice.
+  // §10.4: 64 is the middle of version 0.2's pan scale. Read as version 0.1
+  // it would clear both output bits and silence the channel.
+  const chanMode = [...new Array(20).fill(2), 3, 3, 3, 3];
+  const tracks = chanMode.map(() => []);
+  const at = 76 + 24 + 28 + MELODY.data.length;
+  tracks[0] = [{ delta: 0, code: 7, value: 64 }, { delta: 0, code: 6, value: 0 },
+    { delta: 0, code: 2, value: 60, length: 4 }];
+  tracks[20] = [{ delta: 0, code: 7, value: 64 }, { delta: 0, code: 6, value: 1 },
+    { delta: 0, code: 2, value: 24, length: 4 }];
+  const song = parseSop(buildSop({
+    version: 2, percussive: 0, chanMode, tracks,
+    instruments: [MELODY, pcmInstrument("BOOM", [0, 1, 2], 11025, at)],
+  }));
+  const seq = sopSequence(song, { melodicVoices: 18, rhythmBase: 18, fourOpPairs: [] });
+  assert.deepEqual(seq.filter((e) => e.type === NOTE_ON).map((e) => e.note), [60]);
+  assert.deepEqual(seq.filter((e) => e.type === PAN).map((e) => e.pan), [PAN_CENTRE]);
 });
 
 test("a control-track code on a sequenced track is read, and played as Note plays it", () => {
@@ -354,8 +436,7 @@ test("every corpus SOP parses and ends exactly where the file does",
       const b = read(fn);
       assert.equal(identify(b), "sop", fn);
       const s = parseSop(b);
-      // parseSop throws if the control track does not land on the last byte,
-      // so reaching here is the whole check; the rest is the shape of it.
+      assert.equal(sopByteLength(s), b.length, `${fn}: the walk ends where the file does`);
       assert.deepEqual(s.version, [0, 1], fn);
       assert.equal(s.tracks.length, 20, fn);
       for (const t of s.tracks) events += t.events.length;
@@ -452,4 +533,41 @@ test("a four-op SOP still plays on the OPL2's first operator pair",
     assert.equal(m.chip.opl3, false);
     const pcm = m.renderAll(5);
     assert.ok(Math.sqrt(pcm.reduce((s, v) => s + v * v, 0) / pcm.length) > 0.005, `${fn}: silent`);
+  });
+
+test("the four version-0.2 files parse to their last byte and play their FM part",
+  { skip: !haveV02 }, () => {
+    // §10, measured over these four: 24 tracks, modes 2 then 3, six PCM
+    // records whose stored offset is where their head ends, and every pan 64
+    // but two.
+    const pcms = [];
+    for (const fn of V02_FILES) {
+      const b = new Uint8Array(fs.readFileSync(path.join(V02, fn)));
+      const s = parseSop(b);
+      assert.equal(sopByteLength(s), b.length, `${fn}: the walk ends where the file does`);
+      assert.deepEqual(s.version, [0, 2], fn);
+      assert.deepEqual(s.tracks.map((t) => t.mode), [...new Array(20).fill(2), 3, 3, 3, 3], fn);
+      let at = 76 + 24;
+      for (const inst of s.instruments) {
+        if (inst.pcm) {
+          const stored = new DataView(inst.data.buffer, inst.data.byteOffset).getUint32(0, true);
+          assert.equal(stored, at + 28 + 19, `${fn} ${inst.shortName}: dataOffset`);
+          pcms.push([inst.shortName, inst.pcm.rate, inst.pcm.samples.length]);
+        }
+        at += 28 + inst.data.length;
+      }
+      const pans = s.tracks.flatMap((t) => t.events.filter((e) => e.code === 7).map((e) => e.value));
+      assert.equal(pans.filter((v) => v !== 64).length, fn === "op.sop" ? 2 : 0, fn);
+
+      const m = new IyagiMusic({ song: b, sampleRate: 48000 });
+      if (fn === "mute.sop") continue;                   // one note, at volume 0
+      const pcm = m.renderAll(6);
+      const rms = Math.sqrt(pcm.reduce((n, v) => n + v * v, 0) / pcm.length);
+      assert.ok(rms > 0.005, `${fn}: effectively silent (rms ${rms})`);
+    }
+    assert.deepEqual(pcms, [
+      ["EXPLO02", 11025, 30832],
+      ["EF01", 11025, 12976], ["SF", 11025, 8275], ["EXPRO1", 8050, 6856],
+      ["EVER", 11025, 6728], ["SF02", 11025, 5156],
+    ]);
   });
