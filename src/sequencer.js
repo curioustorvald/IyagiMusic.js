@@ -43,6 +43,7 @@ export const NOTE_ON = 0, NOTE_OFF = 1, VOLUME = 2, PATCH = 3, BEND = 4,
  *   `voice` counts the sample voices from 0, a PATCH carries `sample`, and a
  *   BEND carries `cents`
  * @property {import("./pcm.js").PcmSample|null} [sample] a sample voice's PATCH
+ * @property {string} [name] the sample's name, for a display
  * @property {number} [cents] a sample voice's BEND, from its note's own pitch
  */
 
@@ -150,6 +151,12 @@ export class Sequencer {
     /** A sample voice's last note and bend, so a bend can retune it. */
     this.sampleNote = new Array(this.pcm?.voiceCount ?? 0).fill(-1);
     this.sampleCents = new Array(this.pcm?.voiceCount ?? 0).fill(0);
+    /**
+     * What each sample voice is set to play, by name, for a display: the
+     * sample voices' `voicePatchName`. Changes move `patchEpoch` too.
+     * @type {string[]}
+     */
+    this.sampleName = new Array(this.pcm?.voiceCount ?? 0).fill("");
     /** @type {number} */
     this.tempo = this.baseTempo;
     this.iterator = this.makeEvents[Symbol.iterator]();
@@ -289,7 +296,12 @@ export class Sequencer {
         if (this.sampleCut) p.stop(v);
         break;
       case VOLUME: p.setVolume(v, ev.volume); break;
-      case PATCH: p.setSample(v, ev.sample ?? null); break;
+      case PATCH: {
+        p.setSample(v, ev.sample ?? null);
+        const name = ev.name ?? "";
+        if (this.sampleName[v] !== name) { this.sampleName[v] = name; this.patchEpoch++; }
+        break;
+      }
       case PAN: p.setPan(v, ev.pan); break;
       case BEND:
         this.sampleCents[v] = ev.cents ?? 0;
@@ -833,8 +845,8 @@ export function sopSequence(song, layout) {
         // Every WAV track in the known files selects FM slot 0 at tick 0
         // before any sample. Nothing can play that here, so it is passed over
         // and the voice keeps what it had -- as an empty slot does in Note.
-        const pcm = song.instruments[ev.value]?.pcm;
-        if (pcm) out.push({ ...at, type: PATCH, sample: pcm, order: 1 });
+        const inst = song.instruments[ev.value];
+        if (inst?.pcm) out.push({ ...at, type: PATCH, sample: inst.pcm, name: inst.shortName, order: 1 });
         break;
       }
       case 4:

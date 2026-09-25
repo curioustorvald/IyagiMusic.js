@@ -6,6 +6,7 @@
 import { OPL2, OPL3 } from "./opl/chip.js";
 import {
   NATIVE_RATE, METER_VOICES, METER_STRIDE, M_VOLUME, M_PEAK, CHANNEL_COUNT, RHYTHM_VOICES,
+  M_MOD_DB, M_NOTE, M_KEY_ON, M_STATE, M_TIMBRE, M_PAN, EG_OFF, EG_SUSTAIN,
 } from "./opl/constants.js";
 import { voiceLayout, IMPLAY_PAN } from "./driver.js";
 import {
@@ -410,8 +411,12 @@ export class IyagiMusic {
   /** Chip-wide switches, as the CF_* bits. */
   get chipFlags() { return this.chip.chipFlags; }
 
-  /** Bank patch names by voice, and a counter that moves when one changes. */
+  /**
+   * Bank patch names by voice, sample names by sample voice, and a counter
+   * that moves when either changes.
+   */
   get patchNames() { return this.sequencer.voicePatchName; }
+  get sampleNames() { return this.sequencer.sampleName ?? []; }
   get patchEpoch() { return this.sequencer.patchEpoch; }
 
   /** A buffer the right size for `readMeters`. */
@@ -431,6 +436,41 @@ export class IyagiMusic {
     // Only the rows this chip has: past them the driver has no voice to read a
     // volume off, and writing `undefined` into a Float32Array writes NaN.
     for (let v = 0; v < this.chip.voiceRows; v++) out[v * METER_STRIDE + M_VOLUME] = volume[v];
+    return out;
+  }
+
+  /** A buffer the right size for `readSampleMeters`: one row per sample voice. */
+  sampleMeterBuffer() { return new Float32Array(Math.max(1, this.sampleVoiceCount) * METER_STRIDE); }
+
+  /**
+   * One meter row per sample voice, in the chip's row layout, so a display
+   * can draw them with the code it draws voices with. They are kept out of
+   * `readMeters` because the chip's rows promise the drums are their last
+   * five, and sample voices come after the drums. Peak is on the chip's
+   * scale; key-on is lit while the sample plays; the note is the note struck,
+   * whatever rate that meant; the envelope state is sustain while it plays
+   * and off otherwise, since a sample has no envelope. Reading clears the
+   * peaks, as `readMeters` does.
+   *
+   * @param {Float32Array} out from `sampleMeterBuffer()`
+   * @returns {Float32Array} the same buffer
+   */
+  readSampleMeters(out) {
+    const pcm = this.sequencer.pcm;
+    if (!pcm) return out;
+    for (let v = 0; v < pcm.voiceCount; v++) {
+      const o = v * METER_STRIDE;
+      const voice = pcm.voices[v];
+      const on = !!voice.playing;
+      out[o + M_PEAK] = pcm.takePeak(v);
+      out[o + M_MOD_DB] = -1;
+      out[o + M_NOTE] = on ? this.sequencer.sampleNote[v] : -1;
+      out[o + M_KEY_ON] = on ? 1 : 0;
+      out[o + M_STATE] = on ? EG_SUSTAIN : EG_OFF;
+      out[o + M_VOLUME] = voice.volume;
+      out[o + M_TIMBRE] = 0;
+      out[o + M_PAN] = voice.pan;
+    }
     return out;
   }
 

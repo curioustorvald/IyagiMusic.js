@@ -53,8 +53,11 @@ class PcmVoice {
     this.playing = null;
     this.pos = 0;
     this.step = 0;
+    this.volume = 96;
     this.gain = pcmVolumeGain(96);
     this.pan = PAN_CENTRE;
+    /** Loudest |output| since the last `takePeak`, on the chip's bus scale. */
+    this.peak = 0;
   }
 }
 
@@ -76,7 +79,11 @@ export class PcmMixer {
   setSample(voice, sample) { this.voices[voice].sample = sample; }
 
   /** @param {number} voice @param {number} volume 0..127 */
-  setVolume(voice, volume) { this.voices[voice].gain = pcmVolumeGain(volume); }
+  setVolume(voice, volume) {
+    const v = this.voices[voice];
+    v.volume = volume;
+    v.gain = pcmVolumeGain(volume);
+  }
 
   /** @param {number} voice @param {number} pan one of the PAN_* values */
   setPan(voice, pan) { this.voices[voice].pan = pan; }
@@ -107,6 +114,19 @@ export class PcmMixer {
   get active() { return this.voices.some((v) => v.playing); }
 
   /**
+   * The loudest this voice has been since the last call, on the same scale
+   * as the chip's meter peaks, and start counting again. For a display, as
+   * the chip's own `readMeters` is.
+   * @param {number} voice
+   */
+  takePeak(voice) {
+    const v = this.voices[voice];
+    const p = v.peak;
+    v.peak = 0;
+    return p;
+  }
+
+  /**
    * Add `count` samples of every sounding voice into `left` (and `right`, on
    * a stereo bus) at `offset`. Linear interpolation: these are 8-bit sounds
    * at 8 to 22 kHz, and anything finer would be polishing their noise.
@@ -129,6 +149,7 @@ export class PcmMixer {
       const toR = !!right && (v.pan === PAN_RIGHT || v.pan === PAN_CENTRE);
       const last = s.length - 1;
       let pos = v.pos;
+      let peak = v.peak;
       for (let n = 0; n < count; n++) {
         const i = Math.floor(pos);
         if (i >= last) { v.playing = null; break; }
@@ -136,9 +157,14 @@ export class PcmMixer {
         const x = (s[i] + (s[i + 1] - s[i]) * f) * g;
         if (toL) left[offset + n] += x;
         if (toR) right[offset + n] += x;
+        // Heard or not: a voice panned to nothing still moves its meter, as a
+        // chip channel with both switches off does.
+        const a = x < 0 ? -x : x;
+        if (a > peak) peak = a;
         pos += v.step;
       }
       v.pos = pos;
+      v.peak = peak;
     }
   }
 }

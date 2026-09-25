@@ -6,7 +6,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { IyagiMusic, parseSop, sopPatch, identify } from "../src/player.js";
+import {
+  IyagiMusic, parseSop, sopPatch, identify, METER_STRIDE, M_KEY_ON, M_NOTE, M_VOLUME, M_PEAK,
+} from "../src/player.js";
 import { sopSequence, sopTempo, NOTE_ON, NOTE_OFF, PATCH, PAN, VOLUME, TEMPO } from "../src/sequencer.js";
 import { PAN_NONE, PAN_CENTRE, PAN_LEFT } from "../src/opl/constants.js";
 import { FormatError } from "../src/formats.js";
@@ -290,6 +292,33 @@ test("a sample voice's rate comes from the reference note, and its note-off obey
   assert.equal(m.sequencer.pcm.voices[0].playing, null);
   m = make(); m.sampleCut = false; m.renderAll(12 * tick);
   assert.equal(m.sequencer.pcm.voices[0].playing !== null, true);
+});
+
+test("sample voices have meter rows of their own, and names", () => {
+  const chanMode = [...new Array(20).fill(2), 3, 3, 3, 3];
+  const tracks = chanMode.map(() => []);
+  tracks[21] = [{ delta: 0, code: 6, value: 0 }, { delta: 0, code: 4, value: 127 },
+    { delta: 4, code: 2, value: 26, length: 16 }];
+  const loud = new Array(20000).fill(0).map((_, i) => (i % 2 ? 127 : -127));
+  const m = new IyagiMusic({ song: buildSop({
+    version: 2, percussive: 0, chanMode, tracks,
+    instruments: [pcmInstrument("LOUD", loud, 11025, 76 + 24)],
+  }), sampleRate: 48000 });
+  const rows = m.sampleMeterBuffer();
+  assert.equal(rows.length, 4 * METER_STRIDE);
+  const tick = 60 / (sopTempo(120, 8) * 8);
+  m.renderAll(8 * tick);
+  m.readSampleMeters(rows);
+  // Track 21 is the second WAV track, so the second sample voice.
+  const o = 1 * METER_STRIDE;
+  assert.equal(rows[o + M_KEY_ON], 1);
+  assert.equal(rows[o + M_NOTE], 26);
+  assert.equal(rows[o + M_VOLUME], 127);
+  assert.ok(Math.abs(rows[o + M_PEAK] - 0.5 * 127 / 128) < 0.01, "full scale is one voice's 0.5");
+  assert.equal(rows[M_KEY_ON], 0, "the first sample voice is silent");
+  assert.deepEqual(m.sampleNames, ["", "LOUD", "", ""]);
+  m.readSampleMeters(rows);
+  assert.ok(rows[o + M_PEAK] === 0, "reading takes the peak");
 });
 
 test("a sample left to ring outlives the song's end, and one its note cuts does not", () => {
