@@ -30,10 +30,14 @@ const SOP_INST_NAME_SIZE = 28;
  * lose its place in the file.
  */
 const SOP_INST_DATA_SIZE = { 0: 22, 1: 11, 2: 11, 6: 11, 7: 11, 8: 11, 9: 11, 10: 11, 12: 0 };
-/** SOP §4.2: value bytes following the event code, in a sequenced track. */
-const SOP_TRACK_VALUE_SIZE = { 1: 1, 2: 3, 4: 1, 5: 1, 6: 1, 7: 1 };
-/** SOP §5: the control track has its own, disjoint, code space. */
-const SOP_CTRL_VALUE_SIZE = { 3: 1, 8: 1 };
+/**
+ * SOP §4.2 and §5: value bytes following the event code, on any track. This is
+ * NOTE.EXE's reader, which knows codes 1..8 on every track alike. The corpus
+ * keeps the control track's codes (3, 8) and the sequenced tracks' apart, but
+ * a file outside it has a tempo on track 0 (§4.3), and Note opens it. Which
+ * codes a track may hold is the sequencer's business, not the reader's.
+ */
+const SOP_EVENT_VALUE_SIZE = { 1: 1, 2: 3, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1 };
 
 export class FormatError extends Error {}
 
@@ -727,7 +731,7 @@ export function parseSop(data, options) {
   }
 
   /** §4.1 and §5 share a layout: u16 event count, u32 byte count, then events. */
-  const readTrack = (sizes, what) => {
+  const readTrack = (what) => {
     if (o + 6 > b.length) throw new FormatError(`SOP ${what} header truncated`);
     const count = dv.getUint16(o, true);
     const size = dv.getUint32(o + 2, true);
@@ -739,7 +743,7 @@ export function parseSop(data, options) {
     while (o < end) {
       const delta = dv.getUint16(o, true);
       const code = b[o + 2];
-      const valueSize = sizes[code];
+      const valueSize = SOP_EVENT_VALUE_SIZE[code];
       if (valueSize === undefined) throw new FormatError(`SOP ${what}: unknown event ${code}`);
       tick += delta;
       const ev = { tick, delta, code, value: b[o + 3] };
@@ -761,10 +765,10 @@ export function parseSop(data, options) {
     song.tracks.push({
       mode: modes[t] & 0x7f,      // §2: bit 7 is the editor's channel-disable switch, view state
       modeRaw: modes[t],
-      events: readTrack(SOP_TRACK_VALUE_SIZE, `track ${t}`),
+      events: readTrack(`track ${t}`),
     });
   }
-  song.control = readTrack(SOP_CTRL_VALUE_SIZE, "control track");
+  song.control = readTrack("control track");
   return song;
 }
 

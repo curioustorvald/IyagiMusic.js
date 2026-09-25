@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { IyagiMusic, parseSop, sopPatch, identify } from "../src/player.js";
-import { sopSequence, sopTempo, NOTE_ON, NOTE_OFF, PATCH, PAN, VOLUME } from "../src/sequencer.js";
+import { sopSequence, sopTempo, NOTE_ON, NOTE_OFF, PATCH, PAN, VOLUME, TEMPO } from "../src/sequencer.js";
 import { PAN_NONE } from "../src/opl/constants.js";
 import { FormatError } from "../src/formats.js";
 import { AdlibDriver } from "../src/driver.js";
@@ -125,6 +125,34 @@ test("the reader refuses what it cannot account for", () => {
   const tracks = new Array(N_TRACKS).fill(null).map(() => []);
   tracks[0] = [{ delta: 0, code: 9, value: 0 }];
   assert.throws(() => parseSop(buildSop({ tracks })), /unknown event 9/);
+});
+
+test("a control-track code on a sequenced track is read, and played as Note plays it", () => {
+  // §4.3: a file outside the corpus carries a tempo on track 0, at tick 0,
+  // beside the control track's own. Note's reader knows codes 1..8 on every
+  // track and opens it; its player takes a tempo only from the control track
+  // but a global volume from anywhere.
+  const tracks = new Array(N_TRACKS).fill(null).map(() => []);
+  tracks[0] = [
+    { delta: 0, code: 6, value: 0 },
+    { delta: 0, code: 4, value: 127 },
+    { delta: 0, code: 3, value: 161 },
+    { delta: 0, code: 2, value: 60, length: 8 },
+    { delta: 4, code: 8, value: 64 },
+  ];
+  const song = parseSop(buildSop({
+    percussive: 0, instruments: [MELODY], tracks,
+    control: [{ delta: 0, code: 3, value: 157 }],
+  }));
+  assert.deepEqual(song.tracks[0].events.map((e) => [e.tick, e.code, e.value]),
+    [[0, 6, 0], [0, 4, 127], [0, 3, 161], [0, 2, 60], [4, 8, 64]]);
+  assert.equal(song.tracks[0].events[3].length, 8, "alignment survives the stray event");
+
+  const seq = sopSequence(song);
+  assert.deepEqual(seq.filter((e) => e.type === TEMPO).map((e) => e.tempo),
+    [sopTempo(157, song.tickBeat)], "only the control track's tempo plays");
+  assert.deepEqual(seq.filter((e) => e.type === VOLUME).map((e) => [e.tick, e.volume]),
+    [[0, 127], [4, 64]], "the track's global volume rescales it");
 });
 
 test("instrument bytes unpack into the register fields they name", () => {

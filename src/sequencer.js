@@ -658,6 +658,19 @@ export function sopSequence(song, layout) {
     return best;
   };
 
+  /** §5: a global volume rescales every track that has sounded so far. */
+  const setGlobalVolume = (tick, value) => {
+    globalVolume = value;
+    for (let t = 0; t < nTracks; t++) {
+      if (!touched[t]) continue;
+      const voice = fixedVoiceOf(t);
+      if (voice >= 0) emitVolume(tick, voice, t);
+      else if (trackVoice[t] >= 0 && voiceTrack[trackVoice[t]] === t) {
+        emitVolume(tick, trackVoice[t], t);
+      }
+    }
+  };
+
   let lastTick = 0;
   for (const { ev, track } of merged) {
     lastTick = ev.tick;
@@ -665,15 +678,7 @@ export function sopSequence(song, layout) {
       if (ev.code === 3) {                                   // §5: tempo, in bpm
         out.push({ tick: ev.tick, type: TEMPO, tempo: sopTempo(ev.value, song.tickBeat), order: 0 });
       } else if (ev.code === 8) {                            // §5: global volume
-        globalVolume = ev.value;
-        for (let t = 0; t < nTracks; t++) {
-          if (!touched[t]) continue;
-          const voice = fixedVoiceOf(t);
-          if (voice >= 0) emitVolume(ev.tick, voice, t);
-          else if (trackVoice[t] >= 0 && voiceTrack[trackVoice[t]] === t) {
-            emitVolume(ev.tick, trackVoice[t], t);
-          }
-        }
+        setGlobalVolume(ev.tick, ev.value);
       }
       continue;
     }
@@ -685,6 +690,14 @@ export function sopSequence(song, layout) {
         ? trackVoice[track] : -1);
 
     switch (ev.code) {
+      // §4.3: the control track's codes, on a sequenced track. Note's player
+      // honours a global volume wherever it finds one and a tempo only on the
+      // control track, so the one is played and the other is not.
+      case 8:
+        setGlobalVolume(ev.tick, ev.value);
+        break;
+      case 3:
+        break;
       case 6:                                                // §4.2: instrument
         // An empty slot loads nothing in Note, so the last instrument stays.
         if (!patches[ev.value]) break;

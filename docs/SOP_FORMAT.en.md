@@ -55,7 +55,12 @@ wrote.
 Other descriptions of the format: a memo by 박진홍 (Park Jin-hong), written for
 his `ADLIB262` replay library and corrected by the author of Note himself,
 according to its own preface; it is almost certainly the ancestor of the wiki
-article, and it is cited below where it matters. A Vogons thread and
+article, and it is cited below where it matters. The library ships with the C
+source of its test player, `TS.C`, which §4.3 quotes.
+
+One file from outside the corpus is cited: `MUSIC1.SOP`, given to this study
+privately, with the warning that a bug in it kept it from opening. §4.3 is
+what it turned out to be. It is not counted in any *(measured)* figure. A Vogons thread and
 SudoMaker's `adlib2vgm` were **not** consulted.
 
 ## 1. Header (76 bytes)
@@ -390,7 +395,8 @@ u8  code
 No other code occurs *(measured)*. Note keeps events in memory as a list of
 the same deltas, and its reader, meeting a code outside 1–8, reads no value
 bytes for it and carries on *(NOTE.EXE)* — so an unknown code loses alignment
-silently there, and is a parse error here.
+silently there, and is a parse error here. Codes 3 and 8 are not unknown to
+it on any track; §4.3 is the one file that relies on that.
 
 **Defaults.** The last column is what Note's player assumes for a track that
 has not yet had an event of that kind *(NOTE.EXE)*. The one that matters is
@@ -458,6 +464,45 @@ in ordinary composition". Note's own playback skips it. Seven occurrences in
 one-byte size is confirmed both by the code and by the surrounding events
 staying aligned.
 
+### 4.3 A control-track code on a sequenced track
+
+No corpus file puts code 3 or 8 on a sequenced track *(measured, 347)*. One
+file from outside the corpus does, and it is the reason a reader should not
+refuse one. `MUSIC1.SOP` came with the warning that it had a bug and would not
+open, and in this library it did not: *SOP track 0: unknown event 3*. Its
+structure is sound — every track's `numEvents` and `dataSize` agree with the
+walk, and the control track ends on the last byte — except for one event.
+Track 0 starts with an instrument, a pitch and a volume at tick 0, and then,
+still at tick 0 and before its first note, a **tempo** of 161. The control
+track holds its own tempo at tick 0, 157, and nothing else.
+
+What each player does with it:
+
+- **Note opens it and plays it at 157.** Its reader has one routine for all
+  twenty-one tracks, and it reads one value byte for every code 1–8 except 2,
+  which gets three *(NOTE.EXE)*. A tempo on track 0 is read like any other
+  event. Its player takes tempo only from the control track (§5), so the stray
+  161 does nothing.
+- **HTS stops the song on its first tick.** Its tick routine dispatches a
+  sequenced track's codes through a table of 1–7. Code 3 shares the table's
+  out-of-range branch, and that branch sets the end-of-song flag and returns
+  *(HTS.EXE)*. The event is at tick 0, so nothing plays. A global volume
+  (code 8) on a sequenced track falls outside the table and ends the song in
+  the same way. Its seek routine rewinds to the start on either. This is the
+  sequencer of `TS.C`, the test player that comes with ADLIB262. There, every
+  code a track does not expect falls to `default: END=-1; return 10;`, for the
+  control track and the sequenced tracks alike.
+- **This library reads codes 1–8 on every track, as Note does, and plays them
+  as Note does.** A tempo on a sequenced track is ignored, and a global volume
+  there is honoured. A code outside 1–8 is still a parse error, because Note
+  would read no value bytes for it and the walk would have lost alignment.
+
+How the tempo got onto track 0 is not established. Note's IMS import sends
+tempos to the control track (§9), and the editor's code was not searched for
+another path. The same bytes are therefore a song in Note and silence in HTS,
+and a player that follows HTS or the wiki's disjoint code spaces will refuse a
+file that Note opens and plays.
+
 ## 5. Control track — one, after the last sequenced track
 
 Same layout as §4.1, but a **disjoint code space**:
@@ -468,7 +513,8 @@ Same layout as §4.1, but a **disjoint code space**:
 | 8 | global volume | `u8`, 0–127 *(measured)* | 15 212 | 127 |
 
 Neither code ever appears in a sequenced track, and no sequenced-track code
-ever appears here *(measured)*. Note's player would honour a global volume on
+ever appears here *(measured)*. One file outside the corpus has a tempo on
+track 0; §4.3 covers it. Note's player would honour a global volume on
 any track, but a tempo only on this one *(NOTE.EXE)*. The first control event
 is a global volume at tick 0 in 228 files and a tempo at tick 0 in 97
 *(measured)*.
@@ -550,8 +596,9 @@ are not, and all six are things a player would hit:
 
 Everything else the wiki says held: the 76-byte header, the positional layout,
 the instrument sizes per type, the two- and four-operator byte orders, the
-event codes and their value sizes, the disjoint control-track code space, and
-the ±100 reading of pitch.
+event codes and their value sizes, the disjoint control-track code space (in
+the corpus; §4.3 has the one file outside it that breaks it), and the ±100
+reading of pitch.
 
 Park Jin-hong's memo, the likely source of the wiki, gets the event and
 instrument layouts right but several header offsets wrong (it puts
