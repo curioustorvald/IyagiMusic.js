@@ -377,6 +377,20 @@ test("the corpus stays inside the documented value ranges", { skip: !have }, () 
   assert.equal(oor, 324);
 });
 
+test("HTS starts at 255 bpm, and fifteen songs feel it", { skip: !have }, () => {
+  // §5: HTS programs its timer with 255 at the start of a SOP, where Note and
+  // this library use 120, so what matters is how many songs play notes before
+  // their control track sets a tempo. Fifteen do; five never set one.
+  let late = 0, never = 0;
+  for (const fn of sopFiles()) {
+    const tempos = parseSop(read(fn)).control.filter((e) => e.code === 3);
+    if (!tempos.length) never++;
+    else if (tempos[0].tick !== 0) late++;
+  }
+  assert.equal(late + never, 15);
+  assert.equal(never, 5);
+});
+
 test("a corpus SOP renders audible audio", { skip: !have }, () => {
   for (const fn of ["2REBIBLE.SOP", "4OPDANCE.SOP", "JE-ISAK2.SOP"]) {
     // No `chip` option: a .sop gets the YMF262 it was written for.

@@ -24,7 +24,9 @@ a corpus of 1128 `.ims`, 450 `.bnk`, 680 `.iss` and 2 `.rol` files**. Every
 claim marked *(measured)* was checked against every file in that corpus. One
 question the files could not settle on their own — what a lyric highlight
 actually looks like (§4.2) — was settled by watching Iyagi itself run under
-DOSBox.
+DOSBox. Two players were then disassembled: IMPLAY 3.1, tagged
+*(IMPLAY.EXE)* (§1.2), and HTS 1.23, the player that pairs an `.iss` with a
+`.sop`, tagged *(HTS.EXE)* (§4.4).
 Where the wiki and the observed data disagree, the data wins and the
 disagreement is called out.
 
@@ -504,6 +506,10 @@ ignore it entirely.
 > itself *(IMPLAY.EXE)*. Its built-in lyric editor fills the four fields with
 > exactly those strings when it starts a new file, and it has no way to type
 > anything else into them.
+>
+> Some of the blank group may come from a second editor. HTS, the SOP player
+> that also plays and writes lyrics (§4.4), saves `IMPlay Song V2.0` followed
+> by zeros, so all four credit fields are blank *(HTS.EXE)*.
 
 **`headStr` is a version mark, and IMPLAY reads nothing else from it**
 *(IMPLAY.EXE)*. IMPLAY 3.1's editor saves it as `sprintf("%-20s",
@@ -516,7 +522,9 @@ are the older format. `GOODDAY.ISS`'s lyric text is harmless to IMPLAY,
 because apart from that search it reads only the two counts at 150 and 152,
 and for the credit display the four fields. Nothing in IMPLAY 3.1 reads bytes
 20–29, so the `.PCX` names are not a backdrop *this* player shows. Whichever
-tool wrote them, it was another one.
+tool wrote them, it was another one. HTS tests only byte 13, the one after
+`IMPlay Song V`, for the same decision, and it reads `GOODDAY.ISS` the other
+way (§4.4).
 
 ### 4.2 Highlight records — `recCount` * 5 bytes
 
@@ -644,37 +652,112 @@ first non-space to the last.
 
 ### 4.4 Beside a `.sop` — an addendum
 
-An `.iss` was made to go with an `.ims`, and IMPLAY is the only player this
-document has read that shows one. Yet 79 corpus `.sop` files have an `.iss`
-of the same name *(measured, 347 `.sop`)*, and nothing says how the two line
-up. No program that wrote or played them together has been found to read:
+An `.iss` was made to go with an `.ims`, yet 79 corpus `.sop` files have an
+`.iss` of the same name *(measured, 347 `.sop`)*. The program that paired
+them has been found: **HTS**, 한글 솦 연주기 — *Hangeul Testing SOP* 1.23, a
+beta of 1996–97, by 박진홍 (Park Jin-hong), who also wrote the AdLib 262
+library it plays SOP with. Its manual says it outright: "SOP에서도 ISS를 쓸 수
+있도록 만들어져 있습니다" — an ISS works beside a SOP too. HTS both plays
+the pair and writes the `.iss`: it has IMPLAY's lyric editor, on the same
+Alt-T and with the same keys, which the manual marks "IMPLAY 2.0 호환".
+
+Tagged *(HTS.EXE)*: read out of the disassembly of `HTS.EXE` 1.23 (a
+real-mode Borland C++ program, LZEXE-packed). This section was first written
+from the corpus alone, before HTS turned up. The rule it measured was right,
+and the measurements are kept below as corroboration. A SOP and an ISS made
+with this project's own tools, `NO1.SOP` and `NO1.ISS`, play in time in HTS.
+
+The other programs of the period, for the record:
 
 - **Note** has no lyric support. Its executable names no lyric file, and the
   only other song format it knows is `*.IMS`, which it imports *(NOTE.EXE)*.
 - **`SOPPLAY.EXE`**, the Windows 95 player of 1996, names no format but
   `.sop` anywhere in its strings; its open dialog offers `*.sop` alone.
-- **A player plugin of 2005** did pair them. Its header, `TS.H`, sits with
+- **A player plugin of 2005** pairs them too. Its header, `TS.H`, sits with
   Park Jin-hong's `AD262SOP` library of the same year, and it is the only
-  part of the plugin in that archive. It loads SOP, IMS, ROL and ISS, keeps each record's
-  stored tick beside a computed song tick and millisecond time, and defines
-  `TIMEBASE 240`. The code that fills those fields in is lost, so the
-  conversion cannot be read off it.
+  part of the plugin in that archive. It loads SOP, IMS, ROL and ISS, keeps
+  each record's stored tick beside a computed song tick and millisecond
+  time, and defines `TIMEBASE 240`. Its author and its name suggest a
+  descendant of HTS, but nothing in the archive says so.
 
-So the rule below is measured, not read from a program.
+**A cue counts 240 ticks to the beat, whatever song it sits beside.** This
+is how HTS keeps time *(HTS.EXE)*:
 
-**A cue counts IMS ticks, 240 to the beat, whatever song it sits beside.**
-The stored value converts to IMS ticks exactly as §4.2 says. Against a
-`.sop` with `tickBeat` *T* (SOP_FORMAT §1), that is
+- For a SOP it runs the timer interrupt at `4 × bpm` Hz, scaled by the speed
+  setting, and advances the song one SOP tick every `240 ÷ tickBeat`
+  interrupts. This is Note's own scheme (SOP_FORMAT §5), so a beat is 240
+  interrupts at normal speed.
+- A 32-bit counter, zeroed at the start of the song, goes up by one on
+  **every** interrupt, including those that fall between SOP ticks.
+- A record comes due when `stored ≤ counter ÷ 8`, in integers. The divisor
+  is 10 for the older header (§4.2), and ÷ 8 is done as a shift. So a record
+  fires on the first interrupt at which `counter ≥ 8 × stored`.
+- New records made in HTS's editor get `stored = counter >> 3`. HTS writes
+  the unit it reads.
+
+The stored value is therefore in eighths of a 240-to-the-beat tick in a V2
+file, exactly as beside an `.ims` (§4.2). Against a `.sop` with `tickBeat`
+*T* (SOP_FORMAT §1):
 
 ```
 sopTick = imsTick × T / 240        = stored × T / 30    in a V2 file
 ```
 
-All 79 files have a V2 header, so the older tenths have not been seen beside
-a `.sop`.
+The counter is finer than the song, so a cue can fall between two SOP ticks
+and still fire at its own interrupt. A player has to hold records against a
+fractional song position. Rounding them to the SOP's tick moves them.
 
-`JAM-EVAN` shows it plainly, because the song opens on the vocal, track 1 (the second).
-Its `tickBeat` is 8.
+**Tempo does not come into it.** The song and the counter are driven by the
+same interrupt, so a tempo event, the speed keys (← and →) and Page Up's
+fourfold fast-forward move both together. HTS's F5 and F6, which jump to a
+lyric line, seek the song to `stored × 8` interrupts, the same unit
+*(HTS.EXE)*.
+
+**Which unit a file is in.** HTS decides the divisor from **byte 13** of the
+header alone: NUL means the older tenths, anything else means eighths
+*(HTS.EXE)*. That is the byte after `IMPlay Song V`. IMPLAY searches for the
+whole phrase instead (§4.1). The two tests disagree on one corpus file,
+`GOODDAY.ISS`, whose header is lyric text: IMPLAY reads it in tenths and HTS
+in eighths *(measured, 1031)*. After byte 13 HTS's loader seeks straight to
+the counts at byte 150. It never reads the credit fields.
+
+**What HTS writes.** Its header is `IMPlay Song V2.0` padded with spaces to
+twenty bytes, then **130 zero bytes** up to the counts. The credit fields are
+blank, where IMPLAY 3.1 writes `WRITER`, `COMPOSER`, `SINGER` and `EDITOR`
+*(HTS.EXE)*. 55 of the 79 `.iss` beside a `.sop` have exactly that header. 15
+have IMPLAY 3.1's labels and 9 have the `LeeYS`/`Solgher`/`Damul`/`Salmosa`
+defaults. Beside an `.ims`, 153 of 953 have it *(measured, 1031)*. So most
+SOP lyrics in the corpus were very likely written in HTS, though a blank tail
+is not proof of HTS alone.
+
+**How HTS shows a record** is IMPLAY's rule 2 of §4.2, with small
+differences *(HTS.EXE)*. A record clears and redraws its line when the line
+changes or when its `startX` is left of where the previous record ended.
+The differences:
+
+- HTS handles one record per pass, so it has no batches.
+- It does not skip a span's leading spaces.
+- It does not move a start that lands on the second byte of a two-byte
+  character.
+- It measures the previous end as `startX + widthX`, without clamping.
+- The early showing of the next line is different. HTS does not show a line
+  a quarter of the gap early. It draws the line of the next record whose
+  line differs beneath the current one, the whole time.
+
+This library follows IMPLAY on all of these, beside a `.sop` as well. So the
+timing of its early-shown line is still counted in the 240-to-the-beat unit
+and capped at four beats.
+
+HTS starts a SOP at 255 bpm rather than Note's 120 (SOP_FORMAT §5). That
+changes where lyrics land in seconds, but not against the song.
+
+#### Measured before HTS was found
+
+This is the corpus evidence the rule was first drawn from. All 79 files have
+a V2 header, so the older tenths have not been seen beside a `.sop`.
+
+`JAM-EVAN` shows the rule plainly, because the song opens on the vocal,
+track 1 (the second). Its `tickBeat` is 8.
 
 | vocal note, SOP tick | 32 | 48 | 64 | 76 | 88 |
 |---|---|---|---|---|---|
@@ -692,23 +775,16 @@ The same holds across all 79 pairs *(measured)*:
   tick, and 12 798 of those fall on a note's start in some track. Read as
   the SOP's own ticks, 1523 cues do.
 
-The other 22 052 cues fall between SOP ticks, and that is expected. An ISS
-counts 30 to the beat, which is finer than any `tickBeat` in the corpus (4 to
-16), and many cues were tapped in by hand rather than put on a grid. A player
-has to hold them against a fractional song position. Rounding to the SOP's
-tick would move them.
+The other 22 052 cues fall between SOP ticks. An ISS counts 30 to the beat,
+which is finer than any `tickBeat` in the corpus (4 to 16), and many cues
+were tapped in by hand. HTS's editor stamps a record from the interrupt
+count, not from the song's tick.
 
-Why it works is an inference, not a finding. Note's IMS import keeps the beat
-and the tempo, and only coarsens the grid (SOP_FORMAT §9). So a lyric timed
-against the `.ims` is still in time with the `.sop` it became, as long as
-both are counted in beats. Only three of the 79 have their `.ims` in the
-corpus as well, so this is hard to check directly.
-
-Tempo does not come into it. Both clocks count beats, and the song's tempo
-events move them together. That includes Note's rounding of the timer
-(SOP_FORMAT §5). Everything else §4.2 measures in ticks, such as how early a
-line is shown before its first record and the four-beat cap on that, is in
-the same 240-to-the-beat unit.
+This section once explained the rule by Note's IMS import. The import keeps
+the beat and the tempo (SOP_FORMAT §9), so lyrics timed against an `.ims`
+would stay in time with the `.sop` made from it. That still holds, but it is
+not why the rule works. HTS counts 240 to the beat for every SOP, wherever
+the SOP came from.
 
 **Five pairs do not fit, and no rule makes them fit** *(measured)*:
 
@@ -722,7 +798,11 @@ the same 240-to-the-beat unit.
 
 The first two are name collisions: lyrics for an `.ims` that ended up next to
 an unrelated arrangement. The other three may be the same thing with the
-`.ims` missing. There is not enough here to say.
+`.ims` missing. There is not enough here to say. Their headers do not help.
+`SIM-015B` has IMPLAY 3.1's labels, `SIM-PRO` and `ORANGE1` the `LeeYS`
+defaults, and `CS-HALL1` and `BIV_2MJ` HTS's blank header *(measured)*.
 
 No `.rol` in the corpus has an `.iss` beside it, so nothing is known about
-that pairing. The library leaves a `.rol`'s lyrics in the song's own ticks.
+that pairing. HTS would show one, since its lyric code does not check the
+song's format, but what its counter counts during a ROL was not traced. The
+library leaves a `.rol`'s lyrics in the song's own ticks.

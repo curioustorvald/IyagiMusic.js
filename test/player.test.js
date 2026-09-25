@@ -180,6 +180,38 @@ test("old-header ISS files store ticks in tenths, and IMPLAY scales them", { ski
     `old ${median(ratios.old).toFixed(3)} vs V2 ${median(ratios.v2).toFixed(3)}`);
 });
 
+test("most ISS beside a SOP carry the header HTS writes", { skip: !have }, () => {
+  // FILE_FORMATS §4.4. HTS saves `IMPlay Song V2.0` space-padded to twenty
+  // bytes and then zeros up to the counts at 150, so its credits are blank.
+  // It picks the tick unit from byte 13 alone, where IMPLAY searches for the
+  // whole phrase; the two disagree only on GOODDAY.ISS, whose header is text.
+  const files = fs.readdirSync(MEGA);
+  const names = new Set(files.map((f) => f.toUpperCase()));
+  const htsHeader = (b) =>
+    String.fromCharCode(...b.subarray(0, 20)) === "IMPlay Song V2.0    " &&
+    b.subarray(20, 150).every((x) => x === 0);
+  const tally = { sop: [0, 0], ims: [0, 0] };
+  const disagree = [];
+  for (const fn of files) {
+    if (!fn.toUpperCase().endsWith(".ISS")) continue;
+    const b = new Uint8Array(fs.readFileSync(path.join(MEGA, fn)));
+    const base = fn.toUpperCase().slice(0, -4);
+    for (const kind of ["sop", "ims"]) {
+      if (!names.has(`${base}.${kind.toUpperCase()}`)) continue;
+      tally[kind][0]++;
+      if (htsHeader(b)) tally[kind][1]++;
+    }
+    let nul = b.indexOf(0);
+    if (nul < 0 || nul > 150) nul = 150;
+    const implay = String.fromCharCode(...b.subarray(0, nul)).includes("IMPlay Song V") ? 8 : 10;
+    const hts = b[13] === 0 ? 10 : 8;
+    if (implay !== hts) disagree.push(fn.toUpperCase());
+  }
+  assert.deepEqual(tally.sop, [79, 55]);
+  assert.deepEqual(tally.ims, [953, 153]);
+  assert.deepEqual(disagree, ["GOODDAY.ISS"]);
+});
+
 test("an ISS beside a SOP counts 240 ticks to the beat, not the SOP's own", { skip: !have }, () => {
   // FILE_FORMATS §4.4. JAM-EVAN opens on the vocal, track 1, at SOP ticks
   // 32, 48, 64, 76, 88 with tickBeat 8; its first five cues are stored as

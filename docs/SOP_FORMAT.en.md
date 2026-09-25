@@ -47,6 +47,11 @@ The corpus has grown since the first measurement, to **347** `.sop` files.
 Counts taken for the NOTE.EXE revision say *(measured, 347)*; the older
 *(measured)* counts are over the original 336 and have not all been re-taken.
 
+A second program was disassembled later: `HTS.EXE` 1.23, 박진홍's SOP player
+of 1996–97, which also shows lyrics. A claim marked *(HTS.EXE)* is a reading
+of its code. It is evidence about what that player does, not about what Note
+wrote.
+
 Other descriptions of the format: a memo by 박진홍 (Park Jin-hong), written for
 his `ADLIB262` replay library and corrected by the author of Note himself,
 according to its own preface; it is almost certainly the ancestor of the wiki
@@ -80,7 +85,9 @@ copies exactly seven characters and then stores 0, 1 and 0 into bytes 7, 8 and
 9 with three single-byte writes *(NOTE.EXE)* — not an eight-byte `"sopepos\0"`.
 So `sopepos` has no terminator, and 0/1 is a version, 0.1. The loader compares
 the seven bytes and **never looks at bytes 7–9**: it has no version check at
-all *(NOTE.EXE)*.
+all *(NOTE.EXE)*. HTS, the lyric-capable SOP player (§8), does check. Bytes 7
+and 8 must be 0 and 1, and it refuses anything else with "이 프로그램은 SOP
+0.1판만 연주할 수 있습니다" (this program plays only SOP 0.1) *(HTS.EXE)*.
 
 **Widths.** Earlier revisions split offsets 54, 56 and 74 into a `u8` and a
 padding byte, which matched the data; the code settles it. `percussive`,
@@ -478,6 +485,14 @@ so **tempos 2–4 play too fast in Note**, and only `4OPDANCE.SOP` asks for them
 *(measured, 347)*; and a `tickBeat` that does not divide 240, which the editor
 allows, plays slightly fast.
 
+HTS (§8) keeps time the same way, `4 × bpm` Hz and one tick every
+`240 ÷ tickBeat` interrupts, but **starts a song at 255 bpm, not 120**. Its
+rewind routine programs the timer with 255, and nothing puts 120 in its place
+*(HTS.EXE)*. A song whose control track sets no tempo at tick 0 therefore
+plays fast in HTS until its first tempo event. That is 15 files, and 5 of them
+never set a tempo at all *(measured, 347)*. This library, like Note, starts
+at 120.
+
 The file ends with the control track. Nothing follows it in any of the 336
 files *(measured)*.
 
@@ -621,10 +636,15 @@ not, Note would play on reset registers, and this library stands in the first
 instrument in the table that yields a patch instead.
 
 **Lyrics.** Note has no lyric file, but 79 corpus SOPs have an `.iss` of the
-same name *(measured, 347)*. Their cues count 240 ticks to the beat, as they
-do beside an `.ims`, not the SOP's `tickBeat`. So a cue belongs at SOP tick
-`imsTick × tickBeat / 240`, and often lands between two SOP ticks.
-FILE_FORMATS §4.4 has the measurement and the five pairs that do not fit.
+same name *(measured, 347)*. They belong to **HTS** (한글 솦 연주기, 1996–97), by
+박진홍 (Park Jin-hong), which plays a SOP with its `.iss` and writes the
+`.iss` in an editor copied from IMPLAY's. HTS runs Note's 240 interrupts to
+the beat and counts every interrupt for the lyrics. A cue is due when that
+count reaches `8 × stored` *(HTS.EXE)*. So cues count 240 ticks to the beat,
+as they do beside an `.ims`, not the SOP's `tickBeat`. A cue belongs at SOP
+tick `imsTick × tickBeat / 240` and often lands between two SOP ticks.
+FILE_FORMATS §4.4 has the code, the corpus measurement that agrees with it,
+and the five pairs that do not fit.
 
 ### 8.1 Where this library does not follow Note
 
