@@ -63,7 +63,9 @@ privately, with the warning that a bug in it kept it from opening. §4.3 is
 what it turned out to be. It is not counted in any *(measured)* figure. Four more files from
 outside the corpus are version 0.2, the only ones of that version this study
 has seen. §10 is about them, and a claim marked *(measured, v0.2)* was checked
-on those four alone. A Vogons thread and
+on those four alone. A third program was disassembled for them: `KMAN.EXE`, the
+game they come from, whose player is by Note's author. A claim marked
+*(KMAN.EXE)* is a reading of its code. A Vogons thread and
 SudoMaker's `adlib2vgm` were **not** consulted.
 
 ## 1. Header (76 bytes)
@@ -778,23 +780,30 @@ sign of it, which suggests the scene left `tickBeat` where the import put it.
 Four files outside the corpus say version **0.2**: `ending.sop`, `ending03.sop`,
 `mute.sop` and `op.sop`. They are music from the Korean video game *개미맨*,
 based on 김태형's manhwa of the same name (and unrelated to Marvel's Ant-Man).
-They came to this study in one archive, beside six ordinary version-0.1 files
-whose names begin `ANT_`, and version 0.2 is reportedly the format of a SOP
-library that was only ever used embedded in other programs. No
-program that reads it has been found. HTS refuses anything but 0.1 (§1), and so
-do `TS.C` and roboplay's `sop.c`; NOTE.EXE has no record size for the new
-instrument type (§3.1), and `SOPPLAY.EXE` names no wave-output function at all.
-So everything below is read from the four files alone, with one exception. A
-claim marked *(measured, v0.2)* holds for all four, and none of the four is
-counted in any other *(measured)* figure. The exception is marked *(by ear)*:
-it was chosen by listening to this library play the files against recordings
-of the game, which is evidence about how the game sounds, not about anything
-written down.
+The game keeps them in `MUSIC.DAT`, beside six ordinary version-0.1 songs whose
+names begin `ANT_`: a `u32` count and then an offset and a size for each of the
+ten, byte for byte the files this section was first written from.
+
+The game is also **the one program known to read version 0.2**, and it was
+disassembled for this section. Its executable, `KMAN.EXE`, is a 32-bit DOS/4GW
+program, and its sound code names itself: `Overture Sound System 0.01beta (C)
+1995 Lee Ho Bum [sopepos]`. So version 0.2 is Note's author's own, played by a
+sound system he wrote for the game, which fits the report that the format was
+only ever used embedded in other software. Nothing else found reads it. HTS
+refuses anything but 0.1 (§1), and so do `TS.C` and roboplay's `sop.c`;
+NOTE.EXE has no record size for the new instrument type (§3.1), and
+`SOPPLAY.EXE` names no wave-output function at all.
+
+Claims are marked three ways here. *(measured, v0.2)* holds for all four files,
+none of which is counted in any other *(measured)* figure. *(KMAN.EXE)* is a
+reading of the game's code, and is to version 0.2 what *(NOTE.EXE)* is to 0.1:
+the program the files were made for. *(by ear)* was found by listening to this
+library against recordings of the game, before the code was read. It is kept
+where the code later agreed.
 
 The structure is not in doubt. A reader written to this section consumes all
-four byte for byte and ends on the last byte of each *(measured, v0.2)*. What a
-player should do with the new parts is less certain, and §10.6 lists what the
-files cannot settle.
+four byte for byte and ends on the last byte of each *(measured, v0.2)*, and
+the game's loader reads it the same way *(KMAN.EXE)*.
 
 ### 10.1 What changed
 
@@ -805,7 +814,7 @@ files cannot settle.
 | channel-mode table | 20 bytes; instruments at 96 | 24 bytes; instruments at **100** |
 | track modes | 0, 1, 2 | 2 on tracks 0–19, **3** on tracks 20–23 |
 | instrument types | 0–2, 6–10, 12 | adds **11**, PCM, with inline samples |
-| panning | 0, 1, 2 | **centred on 64** |
+| panning | 0, 1, 2 | **about 64** (§10.4) |
 
 Everything else is as in version 0.1: the header's other offsets, the records
 of the other instrument types, the track layout, the event codes and their
@@ -816,9 +825,11 @@ that NUL, and in bytes 61–72, is stale memory, as in version 0.1; §10.5 reads
 it.
 
 So a version-0.2 file is what §1's `nTracks` would describe if it were read
-rather than assumed. The track count is the one field that changes the layout,
-and it changes it only by moving the instruments four bytes on and adding four
-tracks before the control track.
+rather than assumed, and the game's loader does read it. It keeps byte 8,
+reads byte 73, takes that many mode bytes with bit 7 masked off, and gives the
+control track a mode of its own, 5 *(KMAN.EXE)*. The track count is the one
+field that changes the layout: the instruments move four bytes on, and four
+tracks come before the control track.
 
 ### 10.2 Tracks 20–23 — mode 3
 
@@ -827,6 +838,10 @@ The four new tracks carry mode 3 in all four files, and no other track does
 same event codes, 2, 4, 5, 6 and 7. A WAV track sounds a note only after
 selecting a type-11 instrument. The other tracks never select one
 *(measured, v0.2)*.
+
+The game's player keeps one table of handlers per event and indexes it by the
+track's mode. For mode 3, every one of them drives a sample voice of its
+mixer, numbered from the track less 20 *(KMAN.EXE)*. §10.6 says what each does.
 
 Only `ending.sop` and `op.sop` play anything on them: nine notes, pitches 19–35,
 24 to 48 ticks long. In `ending03.sop` and `mute.sop` the four tracks hold only
@@ -843,42 +858,47 @@ samples, with nothing between it and the next record:
 | 0 | `u8` | instType | 11 |
 | 1 | `char[8]` | shortName | the sample's base name |
 | 9 | `char[19]` | longName | see below |
-| 28 | `u32` | dataOffset | **absolute file offset of the samples**; always this record's offset + 47 |
+| 28 | `u32` | dataOffset | absolute file offset of the samples; always this record's offset + 47 |
 | 32 | `u16` | length | sample bytes, 5156–30832 |
 | 34 | `u16` | period | ⌊3 579 545 ÷ rate⌋: 324 at 11 025 Hz, 444 at 8050 Hz |
 | 36 | `u16` | rate | Hz; 11 025 in five records, 8050 in one |
-| 38 | `u16` | — | 64 in all six |
-| 40 | `u8[3]` | — | 0 in all six |
-| 43 | `u32` | — | a far pointer, `segment:0004`; stale, see below |
+| 38 | `u8` | — | 64 in all six |
+| 39 | `u8[4]` | — | 0 in all six |
+| 43 | `u32` | — | a pointer slot; stale, see below |
 | 47 | `s8[length]` | samples | signed 8-bit mono |
+
+**The game reads three of these fields.** Its loader steps back over the type
+byte, reads the whole 47-byte head, and keeps `length`, `rate` and the byte at
+38. It then reads `length` bytes straight on, so `dataOffset` is never
+consulted, and it never reads `period`: it works the rate out itself (§10.6)
+*(KMAN.EXE)*. The byte at 38 goes into the sample's structure and is never read
+again, so the 64 means nothing to the only player there is. Bytes 39–42 are not
+read at all. Earlier revisions took 38–39 as one `u16`; one byte is all that is
+kept.
 
 **`length` is certain.** In each record, the next record, or track 0 for the
 last one, starts exactly `length` bytes after byte 47. `dataOffset` says the
-same thing a second way. Neither of them needs the other, and they agree in all
-six records.
+same thing a second way *(measured, v0.2)*.
 
 **`period` is the rate put another way.** 3 579 545 Hz is the NTSC colour-burst
 frequency. It is also the Amiga's NTSC Paula clock, which is how a MOD player
 turns a period into a rate, and the YM3812's master clock. Which of these the
-writer meant is not recorded. Since the rate is stored beside it, a player needs
-only one of the two.
+writer meant is not recorded, and since the game ignores the field, a player
+needs only `rate`.
 
-**The 64 at 38** is the top of the MOD volume scale, 0–64, which makes it a
-plausible default volume. Nothing in the files varies it, so that reading is
-untested. Bytes 40–42 might be loop fields. Every sample here is a one-shot, so
-they cannot be tested either.
+**Byte 43 is where the game keeps its pointer to the sample**, once loaded
+*(KMAN.EXE)*. So a file holds whatever the writer's own copy of the structure
+held there. Its offset word is 4 in all six records, as a 16-bit DOS heap block
+is. In `op.sop` the segments rise in record order, each step the previous
+sample's length in 16-byte paragraphs plus five or six. A reader should ignore
+it.
 
-**The far pointer at 43 is the writer's memory, not the file's.** Its offset
-word is 4 in all six records, which is what a 16-bit DOS heap block looks like.
-In `op.sop` the segments rise in record order, and each step is the previous
-sample's length in 16-byte paragraphs plus five or six. It is the address the
-sample had when the file was saved, and a reader should ignore it.
-
-**The samples are signed.** Read as signed bytes, every sample is two to four
-times smoother, sample to sample, than read as unsigned. The one exception is
-the first 18 bytes of `EXPRO1`, the 8050 Hz sample: they are 0x7F–0x84, which is
-unsigned silence. Read signed, that is a full-scale negative pulse of about two
-milliseconds, a click at the start.
+**The samples are signed.** The game's loader turns every byte into unsigned by
+XOR with 0x80, which a Sound Blaster wants *(KMAN.EXE)*, and read as signed
+bytes every sample is two to four times smoother than read as unsigned. The one
+exception is the first 18 bytes of `EXPRO1`, the 8050 Hz sample: they are
+0x7F–0x84, which is unsigned silence. Read signed, that is a full-scale
+negative pulse of about two milliseconds, and the game plays that click too.
 
 **`longName` is a file name.** Its first eight bytes are the start of a DOS file
 name with the dot turned into a NUL: `EF01\0WAV`, `EVER\0WAV`, `SF02\0WAV`,
@@ -891,18 +911,38 @@ type-1 instruments, never types 6–10 *(measured, v0.2)*.
 
 ### 10.4 Panning
 
-A player that read these pans as version 0.1 would silence nearly every track. There are
-117 pan events in the four files, and 115 of them are **64**. The other two,
-54 on track 6 and 74 on track 19 of `op.sop`, sit ten either side of it
-*(measured, v0.2)*. In version 0.1, 64 is not one of the three values and would
-clear both output bits (§4.2). Here it is plainly the centre. The obvious
-reading is MIDI's 0–127 with 64 in the middle, but the files never go beyond
-54–74, and which end is left is not known.
+There are 117 pan events in the four files, and 115 of them are **64**. The
+other two, 54 on track 6 and 74 on track 19 of `op.sop`, sit ten either side of
+it *(measured, v0.2)*. In version 0.1, 64 is not one of the three values and
+would clear both output bits (§4.2).
 
-### 10.5 The writer was not Note
+**The game reads both versions on one scale.** When the file is version 0.1 it
+adds 63 to every pan, so 0, 1 and 2 become 63, 64 and 65 *(KMAN.EXE)*. On an FM
+track it then writes the same switches Note does: **below 64 is 0x20, what 0
+means; 64 is 0x30, both; above 64 is 0x10, what 2 means** *(KMAN.EXE)*. It is a
+switch, not a gradient, so 54 is as far to one side as 0 is, and 74 as far to
+the other as 2. That is Note's direction: §4.2's "0 is right" makes everything
+below 64 right.
+
+**A WAV track pans the other way, and gradually.** The game's mixer takes
+`128 − pan`, gives the nearer side the voice's whole level, and gives the
+other side a linear share of it: `pan ÷ 64` or `(128 − pan) ÷ 64`
+*(KMAN.EXE)*. Below 64 is louder on the first byte of each stereo frame it
+sends the card, which is the left channel of a Sound Blaster's 8-bit stereo.
+That is the opposite side from the FM tracks' below-64. Every WAV-track pan in
+the four files is 64, so no song shows it.
+
+Both absolute directions rest on how the card is wired: OPL3 output A to the
+left, as §4.2 assumes, and the first byte of a DMA stereo frame to the left.
+What does not depend on the card is that the game plays a version-0.2 pan on
+an FM track exactly as it plays the version-0.1 value on the same side of 64,
+and a WAV track's in the mirror image.
+
+### 10.5 The writer was not Note, nor the game
 
 Stale memory in the header shows what wrote these files. Note 1.0 Beta 2 is a
-32-bit PMODE/W program, and this writer was a 16-bit real-mode DOS program:
+32-bit PMODE/W program and the game a 32-bit DOS/4GW one; this writer was a
+16-bit real-mode DOS program:
 
 - In `op.sop` and `ending03.sop`, the title's slack is 16-bit x86 code,
   `8B EC 83 EC 02 C4 5E 08` (`mov bp,sp; sub sp,2; les bx,[bp+8]`). The two
@@ -911,72 +951,123 @@ Stale memory in the header shows what wrote these files. Note 1.0 Beta 2 is a
 - In `ending.sop` it is a table of `CD nn C3` stubs, `int nn; ret`, for
   interrupts 13h to 23h.
 - In `mute.sop` it is text: `6009␍␊- not enough sp` in the title and
-  `ironment␍` in 61–72, with the bytes between no longer holding it. This is Microsoft C's runtime error R6009, *not enough space for
-  environment*.
+  `ironment␍` in 61–72, with the bytes between no longer holding it. This is
+  Microsoft C's runtime error R6009, *not enough space for environment*.
 
 So the writer was built with Microsoft C and, like Note, never cleared its
-header buffer. The far pointers of §10.3 fit a 16-bit heap. None of this
-identifies the program. It rules out Note, and it agrees with the report that
-version 0.2 lived inside other software, here a game.
+header buffer. The pointer slots of §10.3 fit a 16-bit heap. It has not been
+found. It was not Note, and it was not the game, which only reads.
 
-### 10.6 What the files cannot settle
+### 10.6 How the game plays a WAV track
 
-- **How a note sets the playback rate — settled by ear.** Notes on the WAV
-  tracks run 19–35, and `EXPRO1` is played at 24, 23, 24 and 26. The natural
-  model is equal temperament from a reference note at which a sample plays at
-  its own rate, and that reference is not in the files. `SF02` is the one
-  clearly pitched sample, at about 136.2 Hz at its own rate. That is some 30
-  cents from any semitone, so the FM harmony around it cannot pick out a
-  reference either. **Note 24** matches the game *(by ear)*: it is a C, where a
-  tracker plays a sample as recorded, and it plays `EXPRO1` at its own rate
-  three times out of four.
-- **Whether a note's end stops the sample — decided, not settled.** Every note
-  in `op.sop` outlasts its sample at note 24's reference. The one note in
-  `ending.sop` is note 19, 32 ticks long: 2.0 s, against the 3.7 s its sample
-  runs five semitones down. Nothing in the file shows which of the two ends
-  first, and the game cannot either: its ending cutscene is over before the
-  music is. This library takes **the note's length as how long its sample
-  plays**. That is a judgement, not evidence: it is the reading under which a
-  note's length means anything at all on a WAV track.
-- **What volume, pitch and the byte-38 field do to a sample.** Volumes on WAV
-  tracks are 96 and 127, and pitch is always 100.
-- **The direction of panning** (§10.4).
+Everything here is *(KMAN.EXE)*, the game's player read as code, unless it
+says otherwise.
+
+- **A note's pitch is a period.** The player looks the note up as
+  `table[note − 12]`, clamped to the table's 60 entries, so notes 12–71 are
+  distinct and anything outside plays as the nearest end. The table holds
+  ProTracker-style periods, 3424 for note 12 and halving each octave. The
+  mixer plays a sample at `rate × 1712 ÷ period`, its constant being exactly
+  8363 × 1712 × 65536 on a 16.16 step. So **note 24, period 1712, plays a
+  sample at its recorded rate**. That was found *(by ear)* first, and the code
+  agrees. `EXPRO1`, played at 24, 23, 24 and 26, is at its own rate three times
+  out of four.
+- **A note's length is how long its sample plays.** A note-on schedules a
+  note-off at `now + length`, as on any track, and a WAV track's note-off stops
+  its voice. A sample is one-shot: it stops at its last byte whatever the note
+  says, and nothing loops. The one note it matters for is the last hit of
+  `ending.sop`, note 19, 2.0 s against the 3.7 s its sample runs five semitones
+  down. The game's own cutscene ends before the music does, so no recording
+  can show it; the code does.
+- **An overlapping note slurs.** A note-on starts a sample only if the voice's
+  last note has ended; otherwise it changes the pitch, and its own end becomes
+  the note-off. A sample that has already run out is not restarted by a slur.
+  A note that starts where the last one ends is struck again, because a
+  note-off due on a tick comes before the events on it. This is Note's rule
+  for FM notes (§4.2), applied to samples.
+- **Volume is linear.** A volume event is scaled by the global volume,
+  `volume × global >> 7`, and by a master percentage, and a WAV track makes it
+  `(v >> 1) + 1` of 64. The mixer's tables are linear in that level. So 127 is
+  full, 96 is 49/64 (2.3 dB down), and **0 is 1/64, not silence**.
+- **Pitch bends in twelfths of a semitone.** A pitch event on a WAV track
+  becomes `pitch >> 3`. Below 12 it is a semitone down and that row of the
+  period table; 12–23 is no semitone and row `q − 12`; 24 and up is a semitone
+  up. Each row is a twelfth of a semitone above the last, so a bend moves in
+  steps of 8⅓ cents and stops at a semitone either way. The table's rows are
+  rounded by hand: they follow `3424 × 2^(−k/144)` to within a fraction of a
+  percent, but no simple rounding of it reproduces them.
+- **An instrument event only records the slot.** The next note-on starts a
+  sample only if that slot is type 11, so selecting any other slot makes the
+  track's notes silent until a sample is selected again. Every known WAV track
+  selects FM slot 0 at tick 0 before its sample.
+- **A global volume never reaches a sample.** The game's handler for code 8
+  calls its FM volume routine for every track, WAV tracks included, and that
+  routine does not check: on tracks 20–23 it writes past the end of its FM
+  tables. The samples keep their level until their next volume event. No
+  version-0.2 file has a code 8.
+
+Still unsettled: the relative loudness of the samples and the FM, which is
+the Sound Blaster mixer's, not the game's code; and both absolute pan
+directions (§10.4).
 
 ### 10.7 What this library does
 
 `parseSop` reads a version-0.2 file as this section describes. A type-11
 instrument comes back with `pcm`: its `rate`, its `period`, and its signed
-`samples`, taken from right after the head, where the walk finds them. The
-stored offset is not consulted. Its `data` is every byte the record stores
-after the names. In a version-0.1 file, type 11 is still a parse error (§3.1).
+`samples`, taken from right after the head, where the walk finds them, as the
+game takes them. Its `data` is every byte the record stores after the names.
+In a version-0.1 file, type 11 is still a parse error (§3.1).
 
 Mode-3 tracks are **played on sample voices**, one voice per track, mixed into
-the chip's output at the chip's own rate. A full-scale sample is as loud as
-one full-level operator, and volume follows the driver's law for a carrier at
-full level, so 96 is 12 dB down on a sample exactly as on an FM voice. Global
-volume scales both alike. A WAV track's pitch event becomes cents about its
-note. Its instrument event selects a sample; the FM slot every known WAV track
-selects at tick 0 loads nothing, and the voice keeps what it had. A note struck
-while the last one's sample still plays restarts the sample.
+the chip's output at the chip's own rate, by the rules of §10.6: note 24 as
+recorded, the note's length as the sample's, slurs, `(v >> 1) + 1` of 64,
+pitch in twelfths of a semitone, a non-sample slot silencing the voice, and the
+WAV-track pan's linear shares, left below 64. A full-scale sample is as loud as
+one full-level operator (see §10.6 for why that is a choice). FM pans on a
+version-0.2 song are the game's switches (§10.4): below 64 is Note's right.
 
-The two playback questions of §10.6 are **settings**. `sampleReference` is the
-note at which a sample plays at its recorded rate, each semitone away from it a
-twelfth of an octave. A version-0.2 SOP starts at **24** *(by ear)*, and null
-plays every note at the recorded rate. `sampleCut` stops a sample when its
-note ends. A version-0.2 SOP starts with it **on**, the judgement of §10.6,
-and off lets every sample play to its own end. `iyagi-render` takes them as
-`--sample-ref=N`, and `--sample-cut` or `--sample-ring`.
+The rate rule and the cut are also settings. `sampleReference` is the note at
+which a sample plays at its recorded rate, 24 by default for version 0.2, and
+null plays every note at the recorded rate. `sampleCut`, on by default for
+version 0.2, stops a sample when its note ends; off lets every sample play to
+its own end. `iyagi-render` takes them as `--sample-ref=N`, and `--sample-cut`
+or `--sample-ring`.
 
 **A sample left to ring can outlive the song.** The song ends one tick after
 its last event, and with `sampleCut` off a sample struck near that point can
 still be playing: `ending.sop`'s explosion would run 0.27 s past it. The
 player then keeps rendering, chip and samples, until the last sample has run
 out, and reads no further events. Song time stops at the end, so `position`
-does not overshoot `duration`. With `sampleCut` on, as by default, a sample
-stops with its note, which is always before the end.
+does not overshoot `duration`.
 
-Version-0.2 pans are read about 64 and split by thirds into the OPL3's three
-settings: 0–42 left, 43–84 both, 85–127 right. Taking MIDI's direction is a
-choice, since §10.4 cannot settle it, and no known pan reaches either outer
-third, so every pan in the four files plays centred. Read the version-0.1 way,
-64 would silence every channel it touched.
+Where this library does not follow the game:
+
+| Behaviour | The game *(KMAN.EXE)* | This library |
+|-----------|------------------------|--------------|
+| Period of a note | its hand-rounded table | `1712 × 2^((24 − note)/12)`, exactly |
+| Notes below 12 or above 71 | the nearest end of the table | their own pitch |
+| Global volume on a WAV track (§10.6) | never arrives; FM tables overrun | rescales the sample too |
+| Event timing (§10.8) | on the game's ~35 Hz timer | on the tick |
+| FM tracks | the game's own OPL3 driver, not studied | Note's (§8) |
+
+The first two differ by a fraction of a percent and outside anything the files
+play. The third is a bug recorded rather than reproduced. The FM driver is the
+one part of the game's player this section does not cover.
+
+### 10.8 The game's clock
+
+The game does not keep time as Note does (§5). Its timer runs at one fixed
+rate, divisor 0x851E, about 35 Hz, started on a vertical retrace. Each
+interrupt adds its 34 078 PIT counts to a total; when the total reaches the
+wait for the next event, the wait is subtracted, the remainder kept, and the
+sequencer runs every event due at that tick and returns the next delta. The
+wait is `delta × ⌊⌊60 × 1 193 182 ÷ tickBeat⌋ ÷ bpm⌋` counts, but never less
+than one interrupt a tick *(KMAN.EXE)*. A tempo of 0 means 120, and a
+`tickBeat` of 0 means 4.
+
+So a version-0.2 song keeps **the tempo as written** on average, where Note's
+timer makes 120 into 120.04, and each event lands on the next of the game's
+35 Hz interrupts, up to about 29 ms late. A song cannot run faster than 35 ticks
+a second; none of the four comes near it, at 17 to 22. This library plays a
+version-0.2 song at the game's tempo (`sopGameTempo`) and does not quantise its
+events.

@@ -39,6 +39,14 @@ export async function buildWorklet() {
 
   for (const rel of FILES) {
     let src = await readFile(path.join(root, rel), "utf8");
+    // A renamed import binds a name that exists only in the module: strip the
+    // import line and the new name is gone, and the worklet dies with a
+    // ReferenceError the first time the line runs -- which the library's own
+    // tests, running the modules, never see.
+    for (const m of src.matchAll(/^import\s*\{([\s\S]*?)\}\s*from/gm)) {
+      const alias = /\b\w+\s+as\s+\w+/.exec(m[1]);
+      if (alias) throw new Error(`${rel}: renamed import "${alias[0]}" cannot survive bundling`);
+    }
     src = src.replace(/^import\s[\s\S]*?from\s*"[^"]+";\s*$/gm, "");
     src = src.replace(/^export\s*\{[\s\S]*?\}\s*(from\s*"[^"]+")?;\s*$/gm, "");
     src = src.replace(/^export\s+(function|const|class|let|var|async)/gm, "$1");

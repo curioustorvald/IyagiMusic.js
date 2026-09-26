@@ -7,6 +7,7 @@ import { OPL2, OPL3 } from "./opl/chip.js";
 import {
   NATIVE_RATE, METER_VOICES, METER_STRIDE, M_VOLUME, M_PEAK, CHANNEL_COUNT, RHYTHM_VOICES,
   M_MOD_DB, M_NOTE, M_KEY_ON, M_STATE, M_TIMBRE, M_PAN, EG_OFF, EG_SUSTAIN,
+  PAN_LEFT, PAN_RIGHT,
 } from "./opl/constants.js";
 import { voiceLayout, IMPLAY_PAN } from "./driver.js";
 import {
@@ -15,7 +16,7 @@ import {
 } from "./formats.js";
 import {
   Sequencer, imsSequence, rolSequence, sopSequence, sopTempo, sopSampleTracks,
-  SOP_SAMPLE_REFERENCE, SOP_SAMPLE_CUT,
+  SOP_SAMPLE_REFERENCE, SOP_SAMPLE_CUT, sopGameTempo,
 } from "./sequencer.js";
 
 export { OPL2, OPL3, NATIVE_RATE, parseIms, parseRol, parseBnk, parseIss, identify, deltaGcd };
@@ -164,8 +165,10 @@ export class IyagiMusic {
           voiceLayout(this.chipKind === "opl3", this.song.percussive)),
         tickBeat: this.song.tickBeat,
         // SOP §1, §5: Note starts every song at 120 and never reads
-        // basicTempo; the timer makes that 120.04.
-        tempo: sopTempo(120, this.song.tickBeat),
+        // basicTempo; the timer makes that 120.04. §10.8: a version-0.2 song
+        // is the game's, whose clock makes 120 exactly 120.
+        tempo: this.song.version[1] >= 2 || this.song.version[0] > 0
+          ? sopGameTempo(120, this.song.tickBeat) : sopTempo(120, this.song.tickBeat),
         percussive: this.song.percussive,
         sop: true,                            // SOP §8.1: play it as NOTE.EXE does
         patches: [],
@@ -313,9 +316,9 @@ export class IyagiMusic {
   /**
    * How a sample voice's note becomes a playback rate: the note at which a
    * sample plays at its own recorded rate, or null to play every note at that
-   * rate. A version-0.2 SOP starts at 24 (SOP §10.6), which was found by ear
-   * rather than read from anything, so it stays a setting. It reaches the
-   * next sample struck.
+   * rate. A version-0.2 SOP starts at 24, the game's own (SOP §10.6); it
+   * stays a setting for other formats and for listening. It reaches the next
+   * sample struck.
    * @type {number|null}
    */
   get sampleReference() { return this.sequencer.sampleReference; }
@@ -325,8 +328,8 @@ export class IyagiMusic {
 
   /**
    * Whether a sample stops when its note ends (true) or plays to its own end
-   * (false). A version-0.2 SOP starts with true (SOP §10.6), a judgement
-   * rather than a finding, so it stays a setting.
+   * (false). A version-0.2 SOP starts with true, as the game plays it
+   * (SOP §10.6).
    * @type {boolean}
    */
   get sampleCut() { return this.sequencer.sampleCut; }
@@ -467,9 +470,11 @@ export class IyagiMusic {
       out[o + M_NOTE] = on ? this.sequencer.sampleNote[v] : -1;
       out[o + M_KEY_ON] = on ? 1 : 0;
       out[o + M_STATE] = on ? EG_SUSTAIN : EG_OFF;
-      out[o + M_VOLUME] = voice.volume;
+      out[o + M_VOLUME] = this.sequencer.sampleVolume[v];
       out[o + M_TIMBRE] = 0;
-      out[o + M_PAN] = voice.pan;
+      // The chip's PAN_* values say which switches are on; a sample's pan is
+      // a balance, so this says which sides it reaches at all.
+      out[o + M_PAN] = (voice.left > 0 ? PAN_LEFT : 0) | (voice.right > 0 ? PAN_RIGHT : 0);
     }
     return out;
   }

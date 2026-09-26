@@ -9,11 +9,14 @@ import path from "node:path";
 import {
   IyagiMusic, parseSop, sopPatch, identify, METER_STRIDE, M_KEY_ON, M_NOTE, M_VOLUME, M_PEAK,
 } from "../src/player.js";
-import { sopSequence, sopTempo, NOTE_ON, NOTE_OFF, PATCH, PAN, VOLUME, TEMPO } from "../src/sequencer.js";
-import { PAN_NONE, PAN_CENTRE, PAN_LEFT } from "../src/opl/constants.js";
+import {
+  sopSequence, sopTempo, sopGameTempo, sopSampleGain, sopSamplePan, sopSampleCents,
+  NOTE_ON, NOTE_OFF, PATCH, PAN, VOLUME, TEMPO,
+} from "../src/sequencer.js";
+import { PAN_NONE, PAN_CENTRE, PAN_LEFT, PAN_RIGHT } from "../src/opl/constants.js";
 import { FormatError } from "../src/formats.js";
 import { AdlibDriver } from "../src/driver.js";
-import { PcmMixer, pcmVolumeGain } from "../src/pcm.js";
+import { PcmMixer } from "../src/pcm.js";
 import { NATIVE_RATE } from "../src/opl/constants.js";
 
 const CORPUS = "/home/torvald/Documents/tsvm/reference_materials/Iyagi Music Sound";
@@ -213,11 +216,79 @@ test("a version-0.2 WAV track plays on a sample voice, not the FM chip, and 64 p
   const on = seq.filter((e) => e.type === NOTE_ON);
   assert.deepEqual(on.filter((e) => !e.pcm).map((e) => e.note), [60]);
   assert.deepEqual(on.filter((e) => e.pcm).map((e) => [e.voice, e.note]), [[0, 24]]);
-  assert.deepEqual(seq.filter((e) => e.type === PAN).map((e) => [!!e.pcm, e.pan]),
-    [[false, PAN_CENTRE], [true, PAN_CENTRE]]);
-  // The FM slot selected on the WAV track is not a sample and loads nothing;
-  // the PCM slot is.
-  assert.deepEqual(seq.filter((e) => e.type === PATCH && e.pcm).map((e) => e.sample.rate), [11025]);
+  assert.deepEqual(seq.filter((e) => e.type === PAN && !e.pcm).map((e) => e.pan), [PAN_CENTRE]);
+  assert.deepEqual(seq.filter((e) => e.type === PAN && e.pcm).map((e) => [e.left, e.right]), [[1, 1]]);
+  assert.deepEqual(seq.filter((e) => e.type === PATCH && e.pcm).map((e) => e.sample?.rate ?? null),
+    [11025]);
+});
+
+test("version-0.2 FM pans are the game's switches: below 64 is 0's side, above is 2's", () => {
+  // §10.4 (KMAN.EXE): the game adds 63 to a version-0.1 pan, so 0, 1, 2 are
+  // 63, 64, 65 to it, and anything below 64 is as hard to one side as 0 is.
+  const chanMode = [...new Array(20).fill(2), 3, 3, 3, 3];
+  const tracks = chanMode.map(() => []);
+  [54, 64, 74].forEach((value, t) => {
+    tracks[t] = [{ delta: 0, code: 7, value }, { delta: 0, code: 6, value: 0 },
+      { delta: 0, code: 2, value: 60, length: 4 }];
+  });
+  const seq = sopSequence(parseSop(buildSop({ version: 2, percussive: 0, chanMode, tracks,
+    instruments: [MELODY] })), { melodicVoices: 18, rhythmBase: 18, fourOpPairs: [] });
+  const pans = seq.filter((e) => e.type === PAN).map((e) => e.pan);
+  assert.deepEqual(pans, [PAN_RIGHT, PAN_CENTRE, PAN_LEFT], "54, 64, 74 in track order");
+});
+
+test("a WAV track's volume, pan and pitch follow 개미맨's mixer", () => {
+  // §10.6 (KMAN.EXE): volume (v >> 1) + 1 of 64, linear; pan 128 − v, the
+  // near side whole and the far side a linear share, below 64 louder on the
+  // left; pitch >> 3 as twelfths of a semitone, a semitone at most.
+  assert.equal(sopSampleGain(127), 1);
+  assert.equal(sopSampleGain(96), 49 / 64);
+  assert.equal(sopSampleGain(0), 1 / 64, "0 is not silence");
+  assert.deepEqual(sopSamplePan(64), { left: 1, right: 1 });
+  assert.deepEqual(sopSamplePan(0), { left: 1, right: 0 });
+  assert.deepEqual(sopSamplePan(127), { left: 1 / 64, right: 1 });
+  assert.deepEqual(sopSamplePan(32), { left: 1, right: 0.5 });
+  assert.equal(sopSampleCents(100), 0);
+  assert.equal(sopSampleCents(0), -100);
+  assert.equal(sopSampleCents(200), 100);
+  assert.equal(sopSampleCents(104), 100 / 12, "one row of the period table");
+  assert.equal(sopSampleCents(103), 0, "quantised down");
+});
+
+test("an overlapping sample note slurs; a touching one strikes again", () => {
+  // §10.6 (KMAN.EXE): the game's note-on starts a sample only if the voice's
+  // last note has ended, and a note-off due on the same tick comes first.
+  const chanMode = [...new Array(20).fill(2), 3, 3, 3, 3];
+  const tracks = chanMode.map(() => []);
+  tracks[20] = [{ delta: 0, code: 6, value: 0 },
+    { delta: 0, code: 2, value: 24, length: 8 },     // 0..8
+    { delta: 4, code: 2, value: 26, length: 8 },     // 4..12, over the first
+    { delta: 8, code: 2, value: 28, length: 8 }];    // 12..20, touching
+  const seq = sopSequence(parseSop(buildSop({ version: 2, percussive: 0, chanMode, tracks,
+    instruments: [pcmInstrument("S", [0, 1, 2, 3], 11025, 76 + 24)] })));
+  assert.deepEqual(seq.filter((e) => e.pcm && e.type === NOTE_ON).map((e) => [e.tick, e.legato]),
+    [[0, false], [4, true], [12, false]]);
+  // §10.6: selecting a slot that holds no sample leaves the voice with none.
+  const fm = sopSequence(parseSop(buildSop({ version: 2, percussive: 0, chanMode,
+    tracks: chanMode.map((_, t) => t === 20 ? [{ delta: 0, code: 6, value: 1 },
+      { delta: 0, code: 6, value: 0 }, { delta: 0, code: 2, value: 24, length: 4 }] : []),
+    instruments: [MELODY, pcmInstrument("S", [0, 1, 2, 3], 11025, 76 + 24 + 28 + 11)] })));
+  assert.deepEqual(fm.filter((e) => e.pcm && e.type === PATCH).map((e) => e.sample?.rate ?? null),
+    [11025, null]);
+  // The first note's off is gone; the slurred note's end stops it.
+  assert.deepEqual(seq.filter((e) => e.pcm && e.type === NOTE_OFF).map((e) => e.tick), [12, 20]);
+});
+
+test("a version-0.2 song keeps the game's time, not Note's", () => {
+  // §10.8 (KMAN.EXE): PIT counts to the tick, 60 × 1193182 ÷ tickBeat ÷ bpm
+  // in integers, never fewer than one of the game's ~35 Hz timer periods.
+  const counts = Math.floor(Math.floor(60 * 1193182 / 8) / 120);
+  assert.equal(sopGameTempo(120, 8), 60 * 1193182 / (counts * 8));
+  assert.ok(Math.abs(sopGameTempo(120, 8) - 120) < 0.01, "as written, near enough");
+  assert.ok(Math.abs(sopTempo(120, 8) - 120.04) < 0.01, "where Note's is 120.04");
+  const floor = 60 * 1193182 / (0x851e * 16);
+  assert.equal(sopGameTempo(255, 16), floor, "held to one timer period a tick");
+  assert.equal(sopGameTempo(0, 8), sopGameTempo(120, 8), "0 means 120");
 });
 
 test("the sample mixer plays a sample at the rate it is told, and stops at its end", () => {
@@ -225,7 +296,6 @@ test("the sample mixer plays a sample at the rate it is told, and stops at its e
   const ramp = { samples: Int8Array.from({ length: 101 }, (_, i) => i), rate: NATIVE_RATE };
   const m = new PcmMixer(2);
   m.setSample(0, ramp);
-  m.setVolume(0, 127);
   m.trigger(0, NATIVE_RATE / 2);                  // half speed: two outputs a sample
   const out = new Float32Array(300);
   m.mix(out, null, 0, out.length);
@@ -235,17 +305,13 @@ test("the sample mixer plays a sample at the rate it is told, and stops at its e
   assert.equal(out[250], 0, "silent past the end");
   assert.equal(m.active, false);
 
-  // Volume follows the driver's carrier law: 96 is sixteen 0.75 dB steps down.
-  assert.equal(pcmVolumeGain(127), 1);
-  assert.ok(Math.abs(20 * Math.log10(pcmVolumeGain(96)) + 12) < 1e-9);
-  assert.equal(pcmVolumeGain(0), 0);
-
-  // A centred voice is in both buses at full level; a left one only in the left.
+  // Gain and pan are linear, per side.
   const L = new Float32Array(8), R = new Float32Array(8);
-  m.setSample(1, ramp); m.setVolume(1, 127); m.setPan(1, PAN_LEFT);
+  m.setSample(1, ramp); m.setGain(1, 0.5); m.setPan(1, 1, 0.25);
   m.trigger(1, NATIVE_RATE);
   m.mix(L, R, 0, 8);
-  assert.ok(L[5] > 0 && R[5] === 0);
+  assert.ok(Math.abs(L[4] - 4 * unit * 0.5) < 1e-7);
+  assert.ok(Math.abs(R[4] - 4 * unit * 0.5 * 0.25) < 1e-7);
 });
 
 test("a sample voice's rate comes from the reference note, and its note-off obeys sampleCut", () => {

@@ -7,11 +7,12 @@
 // resampled with it on the way out. Like `opl/chip.js` this is pure
 // computation: no DOM, no Web Audio, no `console`.
 //
-// It knows nothing about notes. The caller says what rate a sample plays at,
-// because how a note becomes a rate is a property of the format -- and for
-// SOP 0.2, not yet a known one (SOP §10.6).
+// It knows nothing about notes, volumes or pan positions. The caller says what
+// rate a sample plays at and how loud it is on each side, as plain numbers,
+// because how a note, a volume or a pan becomes those is the format's -- for
+// SOP 0.2, the rules of the game that played it (SOP §10.6).
 
-import { NATIVE_RATE, PAN_LEFT, PAN_RIGHT, PAN_CENTRE } from "./opl/constants.js";
+import { NATIVE_RATE } from "./opl/constants.js";
 
 /**
  * A full-scale sample is as loud on the bus as one full-amplitude operator,
@@ -20,20 +21,6 @@ import { NATIVE_RATE, PAN_LEFT, PAN_RIGHT, PAN_CENTRE } from "./opl/constants.js
  * the chip's voices -- is not thrown by it.
  */
 const PCM_SCALE = 0.5;
-
-/**
- * Volume 0..127 as a gain, by the law the driver uses on a carrier at full
- * level: `63 − ((63 × volume + 64) >> 7)` steps of 0.75 dB (SOP §8). A sample
- * at volume 96 is then 12 dB down, exactly as an FM voice beside it is, which
- * matters more than any absolute choice would: the only thing a listener can
- * judge is the balance.
- * @param {number} volume
- */
-export function pcmVolumeGain(volume) {
-  const v = Math.max(0, Math.min(127, volume | 0));
-  const steps = 63 - ((63 * v + 64) >> 7);
-  return v === 0 ? 0 : 10 ** (-0.75 * steps / 20);
-}
 
 /**
  * A sample, as the mixer takes it: signed 8-bit mono at `rate`. The shape a
@@ -53,9 +40,10 @@ class PcmVoice {
     this.playing = null;
     this.pos = 0;
     this.step = 0;
-    this.volume = 96;
-    this.gain = pcmVolumeGain(96);
-    this.pan = PAN_CENTRE;
+    /** Linear gains, 0..1, on each side of a stereo bus; `left` alone on a mono one. */
+    this.left = 1;
+    this.right = 1;
+    this.gain = 1;
     /** Loudest |output| since the last `takePeak`, on the chip's bus scale. */
     this.peak = 0;
   }
@@ -78,15 +66,20 @@ export class PcmMixer {
   /** @param {number} voice @param {PcmSample|null} sample */
   setSample(voice, sample) { this.voices[voice].sample = sample; }
 
-  /** @param {number} voice @param {number} volume 0..127 */
-  setVolume(voice, volume) {
-    const v = this.voices[voice];
-    v.volume = volume;
-    v.gain = pcmVolumeGain(volume);
-  }
+  /** @param {number} voice @param {number} gain linear, 1 for as recorded */
+  setGain(voice, gain) { this.voices[voice].gain = gain; }
 
-  /** @param {number} voice @param {number} pan one of the PAN_* values */
-  setPan(voice, pan) { this.voices[voice].pan = pan; }
+  /**
+   * How much of the voice each side of a stereo bus gets, linear 0..1. A mono
+   * bus takes the voice at its gain whatever these say, as a mono chip has no
+   * pan to honour.
+   * @param {number} voice @param {number} left @param {number} right
+   */
+  setPan(voice, left, right) {
+    const v = this.voices[voice];
+    v.left = left;
+    v.right = right;
+  }
 
   /**
    * Start the voice's sample from the top, at `rate` Hz. A voice already
@@ -133,8 +126,7 @@ export class PcmMixer {
    *
    * On a stereo bus a centred voice goes into both sides at full level, as
    * the OPL3's own centred channels do, so a mono fold of the two is the
-   * voice exactly; PAN_NONE, both switches off, is silence there as on the
-   * chip.
+   * voice exactly.
    *
    * @param {Float32Array} left @param {Float32Array|null} right
    * @param {number} offset @param {number} count
@@ -144,9 +136,8 @@ export class PcmMixer {
       const s = v.playing;
       if (!s) continue;
       const g = (v.gain * PCM_SCALE) / 128;
-      // A mono bus has no pan to honour, as a mono chip has none.
-      const toL = right ? (v.pan === PAN_LEFT || v.pan === PAN_CENTRE) : true;
-      const toR = !!right && (v.pan === PAN_RIGHT || v.pan === PAN_CENTRE);
+      const gl = right ? v.left : 1;
+      const gr = right ? v.right : 0;
       const last = s.length - 1;
       let pos = v.pos;
       let peak = v.peak;
@@ -155,10 +146,9 @@ export class PcmMixer {
         if (i >= last) { v.playing = null; break; }
         const f = pos - i;
         const x = (s[i] + (s[i + 1] - s[i]) * f) * g;
-        if (toL) left[offset + n] += x;
-        if (toR) right[offset + n] += x;
-        // Heard or not: a voice panned to nothing still moves its meter, as a
-        // chip channel with both switches off does.
+        left[offset + n] += x * gl;
+        if (gr) right[offset + n] += x * gr;
+        // Before panning, as the chip's meters read a channel's output.
         const a = x < 0 ? -x : x;
         if (a > peak) peak = a;
         pos += v.step;
