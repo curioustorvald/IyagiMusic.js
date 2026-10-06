@@ -177,8 +177,10 @@ fnum = e & 0x03FF
 ### 5.2 Note to registers
 
 `pitchRange` is the file's pitch-bend range, 1–12 semitones, clamped into that
-interval. `note` is the **chip** note number: subtract 12 from the MIDI note
-number, then clamp at 0. (MIDI 60 = middle C becomes chip note 48.)
+interval as IMPLAY clamps it *(IMPLAY.EXE)*. HTS ignores the field and always
+bends one semitone (FILE_FORMATS §1.1). `note` is the **chip** note number:
+subtract 12 from the MIDI note number, then clamp at 0. (MIDI 60 = middle C
+becomes chip note 48.)
 
 ```
 bendOffset = ((bend - 8192) >> 5) * pitchRange     // 8.8 fixed point
@@ -203,6 +205,15 @@ Cache the 0xB0 value: note-off needs it (§7).
 All arithmetic is 16-bit two's complement. `bend - 8192` gives ±8192; the
 `>> 5` reduces it to ±256 = ±1 semitone in 8.8 fixed point, and multiplying by
 `pitchRange` widens it to the file's declared range.
+
+**Whose arithmetic this is.** Neither of the two disassembled players does
+exactly this. HTS 1.23 does all of it — the `>> 5`, the rounding to 1/16
+semitone, the clamp at `96*16 - 1` — except the multiply, which it does not
+have *(HTS.EXE)*. IMPLAY 3.1 has the multiply but not the sixteenths. It works
+in 25ths of a semitone: the bend becomes `(bend - 8192) * pitchRange * 25 / 8192`
+in 32-bit arithmetic, split into whole semitones and a step out of 25
+*(IMPLAY.EXE)*. How IMPLAY turns that step into an F-number has not been traced,
+so whether the two land on audibly different frequencies is not known.
 
 > **Deviation to avoid.** One circulating player adds 0x800 to the bend before
 > calling this routine, for voices 0–6 only. At the near-universal

@@ -59,7 +59,7 @@ glued onto the end. Layout:
 | 50  | `u8`      | srcTickBeat   | ticks per beat of the ROL this was converted from, or 0 if not recorded — §1.8 |
 | 51  | `u8[7]`   | reserved      | usually zero; 3 files put values in bytes 54–57 |
 | 58  | `u8`      | soundMode     | 0 = melodic (9 channels), 1 = percussive (11 channels) |
-| 59  | `u8`      | pitchBRange   | pitch-bend range in semitones, 1–12; always 1 except 3 files that say 60 |
+| 59  | `u8`      | pitchBRange   | pitch-bend range in semitones, 1–12; always 1 except four files that say 60 *(measured, 1725)* — see below |
 | 60  | `u16`     | basicTempo    | tempo in beats per minute |
 | 62  | `u8[8]`   | reserved2     | always zero *(measured)* |
 
@@ -70,6 +70,19 @@ than the music actually uses (see §1.6).
 > **Trap.** `soundMode` uses **0 = melodic**. The `.rol` field that means the
 > same thing (`isMelodic`) is **inverted**: 1 = melodic. Converters that carry
 > the byte across unchanged produce silent drums or drum-flavoured melodies.
+
+**`pitchBRange` is honoured by one player and not the other.** IMPLAY reads
+byte 59 as an unsigned byte and clamps it into 1–12: 0 plays as 1, anything
+over 12 as 12 *(IMPLAY.EXE)*. HTS does not use it. Its loader takes bytes 6,
+36, 58, 42 and 60 and skips 59, and its bend arithmetic has no range in it, so
+every IMS bends one semitone each way in HTS *(HTS.EXE)*. For the 1721 files
+that say 1 the two agree. For the four that say 60 — `KSH-LHJ.IMS`,
+`POPCORN.IMS`, `U-AFTER.IMS` and `U-LOVEIS.IMS` — they disagree twelvefold,
+and audibly: all four bend down to 0, the full deflection. Neither may be what
+was meant. Their bends sit on ROL pitch multipliers (§1.4), and at a range of
+10 semitones 97% of their 1389 off-centre bends land on whole semitones,
+against 50% at 12 and 25% at 1 *(measured, 1725)*. Where the 60 came from is
+not known.
 
 ### 1.2 MIDI event stream
 
@@ -172,8 +185,10 @@ carrier attack is 13 where the driver has 15.
 7-bit clean *(measured)*, and the observed values cluster on
 `round(8192 * k)` for the ROL pitch multipliers 0.8, 0.9, 1.0, 1.1 …, which
 confirms the packing. A player that reads the two bytes as a little-endian
-`u16` and halves it is off by up to 63/16383 of the bend range — audible only
-as a fraction of a cent at the usual ±1-semitone range, but wrong.
+`u16` and halves it is off by up to 64/16383 of the bend range — audible only
+as a fraction of a cent at the usual ±1-semitone range, but wrong. HTS reads
+it that way *(HTS.EXE)*; since it also plays every bend at ±1 semitone (§1.1),
+the error stays under a cent there.
 
 **Tempo multiplier (`F0 7F 00 ii ff F7`).** Sets
 
