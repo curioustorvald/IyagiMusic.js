@@ -146,6 +146,19 @@ CP437 byte, the Unicode equivalent and the corpus count — and
 Where the font and its addressing came from is written up outside this repo,
 in the workspace's `iyagi_for_windows/docs/KSR_FONT.en.md`.
 
+`ISPC.png` is a visual conversion of the Iyagi's own custom symbol font,
+and `iyagi-ispc.woff2` its vector tracing. Modern players implementing Iyagi's
+user-defined encoding are recommended to use this font as follows:
+
+```css
+@font-face {
+  font-family: "Iyagi ISPC";
+  src: url("fonts/iyagi-ispc.woff2") format("woff2");
+  unicode-range: U+2424, U+1F402, U+1FAE7;
+  font-display: block;
+}
+```
+
 The Unicode equivalents are a judgement about what each glyph *is*, not a
 standard, and they are not unique: **69 of the 128 characters are also
 reachable through a KS X 1001 symbol code** (♥ is both `0xD483` and `0xD9BE`),

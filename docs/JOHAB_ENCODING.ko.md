@@ -137,6 +137,19 @@ CP437의 것으로, BBS 단말에 필요한 바로 그것이다. ANSI 아트의 
 읽는 표로 바꾼다. 글꼴과 그 주소 지정이 어디서 나왔는지는 이 저장소 바깥,
 작업 폴더의 `iyagi_for_windows/docs/KSR_FONT.ko.md`에 적었다.
 
+`ISPC.png`는 이야기의 특수문자 글꼴을 이미지로 변환한 것이고, `iyagi-ispc.woff2`는
+이를 벡터로 트레이싱한 것이다. 이야기의 인코딩을 구현하는 현대식 플레이어라면 해당
+웹폰트를 다음과 같이 사용할 것을 권장한다.
+
+```css
+@font-face {
+  font-family: "Iyagi ISPC";
+  src: url("fonts/iyagi-ispc.woff2") format("woff2");
+  unicode-range: U+2424, U+1F402, U+1FAE7;
+  font-display: block;
+}
+```
+
 유니코드 대응은 표준이 아니라 "이 글자가 무엇인가"에 대한 판단이며, 일대일도
 아니다. **128자 가운데 69자는 KS X 1001 기호 코드로도 닿을 수 있고**(♥는
 `0xD483`이면서 `0xD9BE`다), 두 코드가 같은 글자를 그리기도 한다(ε는 `0xD4A0`
