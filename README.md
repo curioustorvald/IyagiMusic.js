@@ -238,8 +238,8 @@ npm run build:pages    # IyagiMusic-web을 최신 소스로 갱신
 
 이야기 전용 글자 가운데 셋(하늘소 로고 D480, 줄바꿈 표시 D4FA, 구슬 D4FF)은
 유니코드에 제 모양이 없어 가장 가까운 문자로 옮겨집니다. `fonts/iyagi-ispc.woff2`는
-그 세 문자 자리에 `ISPC.FNT`의 원래 비트맵을 그려 넣은 웹폰트로,
-`tools/gen_ispc_font.py`가 `docs/ISPC.png`에서 읽어 만들고
+그 세 문자 자리에 `ISPC.FNT`의 글자를 곡선과 사선으로 다시 그려 넣은 웹폰트로,
+`tools/gen_ispc_font.py`가 만들고(`--proof`로 `docs/ISPC.png`의 원래 비트맵과 겹쳐 볼 수 있습니다)
 `npm run build:pages`가 프런트엔드로 복사합니다. `unicode-range`를
 `U+2424, U+1F402, U+1FAE7`로 두고 글꼴 목록 맨 앞에 넣으면 됩니다.
 
