@@ -6,6 +6,8 @@
 //   iyagimusic-worker/iyagi-processor.bundle.js
 //                                            one classic script, because an
 //                                            AudioWorklet cannot import modules
+// and the ISPC glyph font, fonts/iyagi-ispc.woff2, which the page's stylesheet
+// puts ahead of its text fonts (built by tools/gen_ispc_font.py).
 //
 // The bundle itself is built by tools/build-worklet.mjs, which is also what
 // `npm run build` and `prepack` call -- the frontend and the npm tarball get
@@ -36,6 +38,7 @@ await mkdir(pages, { recursive: true });
 await writeFile(path.join(pages, "iyagi-processor.bundle.js"), out);
 
 await cp(path.join(root, "src"), path.join(pages, "lib"), { recursive: true });
+await cp(path.join(root, "fonts"), path.join(pages, "fonts"), { recursive: true });
 
 const count = (await readdir(path.join(pages, "lib"), { recursive: true }))
   .filter((f) => f.endsWith(".js")).length;
