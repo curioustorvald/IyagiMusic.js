@@ -69,6 +69,47 @@ test("total level attenuates by 0.75 dB a step", () => {
   }
 });
 
+test("key scale settings 1 and 2 are exact halves and quarters of setting 3", () => {
+  // Table 3-4: 6, 3 and 1.5 dB/octave. At block 7 and F-number 200 the
+  // setting-3 amount is 37 table units (27.75 dB) -- odd, which is the case
+  // that matters: cut to whole 0.75 dB units first, setting 1 lost 0.375 dB
+  // of its 13.875 and setting 2 0.1875 of its 6.9375. Measured as ratios of
+  // setting 3's own measured attenuation, which cancels the log-sin rounding.
+  const level = (ksl) => {
+    const chip = new OPL2();
+    tone(chip, 200, 7);
+    chip.write(0x43, ksl << 6);
+    const buf = new Float32Array(1 << 15);
+    chip.generate(buf, 0, buf.length);
+    return rms(buf);
+  };
+  const ref = level(0);
+  const db = (ksl) => -20 * Math.log10(level(ksl) / ref);
+  const full = db(3);
+  assert.ok(Math.abs(full - 27.75) < 0.2, `setting 3: ${full.toFixed(3)} dB`);
+  assert.ok(Math.abs(db(1) / full - 1 / 2) < 0.003, `setting 1 is not half: ${db(1).toFixed(3)} dB`);
+  assert.ok(Math.abs(db(2) / full - 1 / 4) < 0.003, `setting 2 is not a quarter: ${db(2).toFixed(3)} dB`);
+});
+
+test("note-select reads the F-number's MSB at 0, against the manual", () => {
+  // The application manual (p. 13) says note-select 0 takes the second bit
+  // and 1 the MSB. The chip does the opposite. That rests on others' word,
+  // not on a first-party source -- see "Corrected on second-hand evidence" in
+  // docs/OPL2_NOTES.en.md -- and this pins the reading the core has chosen.
+  const offset = (fnum, nts) => {
+    const chip = new OPL2();
+    tone(chip, fnum, 4);
+    chip.write(0x23, 0x11);                      // key scale rate on, MULT 1
+    chip.write(0x08, nts ? 0x40 : 0);            // retunes every channel
+    return chip.channels[0].car.ksrOffset;
+  };
+  // Block 4 is 8; the low bit comes from bit 9 (0x200) or bit 8 (0x100).
+  assert.equal(offset(0x200, false), 9);
+  assert.equal(offset(0x100, false), 8);
+  assert.equal(offset(0x200, true), 8);
+  assert.equal(offset(0x100, true), 9);
+});
+
 test("decay time halves for every step of the decay rate", () => {
   // Envelope peak per 64-sample window; time until it falls 6 dB.
   const decaySamples = (dr) => {

@@ -40,7 +40,10 @@ export const TL_STEP_DB = 0.75;
 export const LOG_UNITS_PER_DB = 256 / Math.log10(2) / 20;   // ≈ 42.52
 export const ENV_TO_LOG = 8;
 export const TL_TO_LOG = 32;
-export const KSL_TO_LOG = 32;              // the KSL table counts in 0.75 dB too
+/** The key-scale table's unit, 0.75 dB, in log2 units. The chip itself keeps
+ *  key scaling in envelope steps (`ENV_TO_LOG`), so that settings 1 and 2
+ *  divide it exactly; this stays for anything reading the table in its own unit. */
+export const KSL_TO_LOG = 32;
 
 /** Envelope generator phases. */
 export const EG_OFF = 0;

@@ -18,8 +18,9 @@ published description of the die, and the entry says so.
 
 The short version: **pitch, level, envelope timing, the modulation index and
 the five rhythm voices are right; the tremolo and vibrato waveforms are an
-approximation, and one number in the rhythm mix rests on a second-hand
-report.**
+approximation, and three things rest on second-hand reports rather than on a
+first-party source: one number in the rhythm mix, which F-number bit the
+note-select switch picks, and the rounding of two key-scale-level settings.**
 
 ## Verified against first principles
 
@@ -58,6 +59,8 @@ makes some songs play with the wrong instruments and others fall silent.
   `round(8·log2(i)) + 24` except at i = 7, 9, 14 and 15, where it is one unit
   higher; the ROM values are used. Settings 1 and 2 are the wrong way round —
   1 is 3.0 dB/octave and 2 is 1.5 — which is the chip's quirk, not a slip.
+  They are exact halves and quarters of setting 3's amount, carried in
+  envelope steps; see "Corrected on second-hand evidence" for why.
 - **Feedback, and the modulation index it does *not* fix.** Feedback is
   documented as π/16 … 4π of phase modulation for settings 1…7. Full-scale
   output is ±4096 and a cycle of phase is 1024 units, so 4π is a halving:
@@ -145,6 +148,44 @@ makes some songs play with the wrong instruments and others fall silent.
   by measurement first. `RHYTHM_MIX` is one named constant so that a hardware
   recording can settle it either way without hunting.
 
+## Corrected on second-hand evidence
+
+Two readings changed on 2026-10-14, and neither rests on a first-party source,
+so both are labelled the way the rhythm mix is. What decided them is that the
+two emulators that report checking the hardware itself — MAME's original OPL
+core against a YM3812, Nuked OPL3 against the YMF262 die — agree on both, and a
+reading of the manual that they contradict is the weaker one to keep. Both are
+behaviour, re-derived here in this core's own terms; nothing was carried over.
+
+- **Note-select 0 reads the F-number's MSB.** The key scale number is the block
+  and one more bit of the F-number, and register 0x08's D6 picks which. The
+  application manual (p. 13) says that at 0 "the keyboard split is the second
+  bit from the most significant bit (MSB) of the F-Number" and at 1 the MSB,
+  and this core did exactly that until now. MAME's original core reads it the
+  other way round and says why — "the info below is actually opposite to what
+  is stated in the Manuals (verifed on real YM3812)" — and so do its successor
+  ymfm ("actually reversed from what the manual says") and Nuked OPL3. Opal
+  follows the manual. Note-select is always 0 here — IMS and ROL cannot change
+  it (ENGINE_SPEC §2), and the player writes 0 for a `.sop` too — so what moved
+  is every operator with key scale rate on: its rate is now one step quicker at
+  F-numbers 512…767 and one step slower at 256…511 than it was.
+- **Key scale level settings 1 and 2 are exact.** Table 3-4 gives 6, 3 and
+  1.5 dB/octave, and the core used to get the last two by shifting the 0.75 dB
+  table value right by one or two, which throws the remainder away: at a table
+  value of 37 (27.75 dB at setting 3) setting 1 gave 13.5 dB where half is
+  13.875, and setting 2 6.75 where a quarter is 6.94 — up to 0.56 dB short.
+  The manual cannot tell the two apart, because the slope per octave is the
+  same either way and only the offset differs. The amount is now carried in
+  envelope steps, a quarter of the table's unit, before it is shifted, so both
+  settings come out exact. That is the shape Nuked OPL3 transcribes from the
+  die, and MAME's two cores and Opal keep the fraction as well.
+
+Over the corpus *(measured)* — the first four seconds of all 1725 `.ims` and
+347 `.sop` files, old against new — 1839 songs changed: the level by a median
+of 0.06 dB (95th percentile 0.4 dB), and the 50 ms envelope by a median
+correlation of 0.9997. The largest changes are in quiet, slow-attack openings,
+where a rate one step quicker or slower shows most.
+
 ## Knowingly approximate
 
 - **Tremolo and vibrato** are computed as an analytic triangle at the
@@ -190,9 +231,11 @@ that true.
 The way to close the remaining gap is a recording from real hardware or from a
 gate-level emulator, compared per-sample. Three things are worth measuring
 first, in this order: whether the rhythm channels really are summed twice, which
-is the one number here resting on a second-hand report; whether the attack's 6%
+is the one level here resting on a second-hand report; whether the attack's 6%
 is the curve or the manual's own rounding; and the stepping of the tremolo and
-vibrato tables. A fourth, if the drums still do not sit right: the top cymbal is
+vibrato tables. The note-select reading above is cheap to settle at the same
+sitting: one operator with key scale rate on, at an F-number whose bits 8 and 9
+differ, timed with note-select 0 and 1. A fourth, if the drums still do not sit right: the top cymbal is
 the only rhythm voice whose phase lands on the sine's peak at both of its two
 values, so it is a ±full-scale square where the others are partial — and the
 phase equations are the part with no first-party check.
