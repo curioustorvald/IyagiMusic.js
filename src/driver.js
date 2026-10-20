@@ -676,8 +676,10 @@ export class AdlibDriver {
       const singleSlot = this.percussion && voice > this.bd;
       return !!this.slotCarrier[slot] || !this.slotParams[slot][P_CONNECTION] || singleSlot;
     }
-    // §10: reading each half's connection bit as "this half's first operator
-    // goes straight to the output" names the outputs of all four connections.
+    // §10.2: the outputs of the four connections. Operator 4 always; operator
+    // 1 when the head's CNT is set; and when the slave's is, the end of the
+    // other chain -- operator 2 (1 → 2, and 3 → 4) or operator 3 (1, and
+    // 2 → 3, and 4).
     const map = this.#map();
     const head = this.#slotsOf(voice);
     const slave = this.#slotsOf(map.four.partner[voice]);
@@ -685,8 +687,8 @@ export class AdlibDriver {
     const cnt2 = !this.slotParams[slave[0]][P_CONNECTION];
     switch (position) {
       case OP1: return cnt1;
-      case OP2: return false;
-      case OP3: return cnt2;
+      case OP2: return !cnt1 && cnt2;
+      case OP3: return cnt1 && cnt2;
       default: return true;                     // OP4 is always an output
     }
   }

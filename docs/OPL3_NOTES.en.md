@@ -68,13 +68,15 @@ the five rhythm voices — carries over unchanged rather than being re-argued.
   range the envelope and the exponential table span. One half cycle is
   therefore the chip's whole dynamic range, top to bottom, and its two halves
   meet at silence rather than at a step.
-- **The four-operator connections** come from reading each half's CNT bit as
-  *"this half's first operator goes straight to the output instead of
-  modulating"*. That one sentence produces all four rows of the published
-  connection figure, which is why it is in the source in place of a table.
+- **The four-operator connections** are the four figures of the YMF262 data
+  sheet (catalogue 4MF262A6, p. 13). Reading each half's CNT bit as *"this
+  half's first operator goes straight to the output instead of modulating"*
+  produces three of them and NOT the second: head 0, slave 1 is two FM pairs
+  side by side, 1 → 2 and 3 → 4, not 1 → 2 → 3 with 4 beside it. This core
+  read it the one-sentence way until that was checked against the figure.
 - **Feedback belongs to operator 1 alone.** The slave half's feedback setting
-  has nothing to act on: operator 3 is fed by the chain rather than by itself.
-  This follows from the connection table rather than being asserted beside it.
+  has nothing to act on: operator 3 is fed by the chain, or by nothing where it
+  starts a pair of its own, and never by itself.
 - **Volume scaling generalises through the same table.** ENGINE_SPEC §4's rule
   is "scale what reaches the output"; §10.2 works out which operators those
   are for each connection.

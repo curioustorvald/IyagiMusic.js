@@ -456,6 +456,43 @@ test("the OPL2 driver on an OPL3 chip is an OPL2", () => {
   assert.deepEqual(run(new OPL3()), run(new OPL2()));
 });
 
+test("note volume reaches the operators each four-operator connection outputs", () => {
+  // §10.2: channel volume scales what reaches the output and leaves what only
+  // modulates alone. Every operator here is at full level, so at volume 0 an
+  // output operator's 0x40 reads 63 and a modulator's stays 0. The YMF262 data
+  // sheet's connections (catalogue 4MF262A6, p. 13), by head CNT, slave CNT:
+  //
+  //   0,0   1 → 2 → 3 → 4          0,1   1 → 2, and 3 → 4
+  //   1,0   1, and 2 → 3 → 4       1,1   1, and 2 → 3, and 4
+  const outputs = {
+    "0,0": [false, false, false, true],
+    "0,1": [false, true, false, true],
+    "1,0": [true, false, false, true],
+    "1,1": [true, false, true, true],
+  };
+  // A bank operator stores CNT inverted: `connection` 1 is FM, 0 additive.
+  const op = (cnt) => ({ ksl: 0, multiple: 1, feedback: 0, attack: 15, sustain: 0, eg: 1, decay: 0, release: 5, totalLevel: 0, am: 0, vib: 0, ksr: 0, connection: cnt ? 0 : 1 });
+  for (const [name, wanted] of Object.entries(outputs)) {
+    const [cnt1, cnt2] = name.split(",").map(Number);
+    const chip = new OPL3();
+    const written = new Map();
+    const write = chip.write.bind(chip);
+    chip.write = (reg, value) => { written.set(reg, value); write(reg, value); };
+    const driver = new AdlibDriver(chip, { opl3: true });
+    driver.setMode(false);
+    driver.setVoiceTimbre(0, {
+      name: "F", modulator: op(cnt1), carrier: op(cnt1), modWave: 0, carWave: 0,
+      pair: { modulator: op(cnt2), carrier: op(cnt2), modWave: 0, carWave: 0 },
+    });
+    driver.setVoiceVolume(0, 0);
+    // Voice 0 joins channels 0 and 3: operators at 0x00, 0x03, 0x08, 0x0B.
+    [0x40, 0x43, 0x48, 0x4b].forEach((reg, i) => {
+      assert.equal(written.get(reg) & 63, wanted[i] ? 63 : 0,
+        `connection ${name}: operator ${i + 1} ${wanted[i] ? "should" : "should not"} take the volume`);
+    });
+  }
+});
+
 /* ------------------------------------------------------- SOP on the OPL3 */
 
 const N_TRACKS = 20;

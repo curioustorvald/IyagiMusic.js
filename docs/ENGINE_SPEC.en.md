@@ -375,9 +375,9 @@ bank, and none of those is in a pair.
 
 ### 10.2 The four connections
 
-Each half keeps its own CNT bit in its own 0xC0. Reading CNT as *"this half's
-first operator goes straight to the output instead of modulating"* gives all
-four connections at once:
+Each half keeps its own CNT bit in its own 0xC0, and the pair of them picks
+one of the four connections the YMF262 data sheet draws (catalogue 4MF262A6,
+p. 13):
 
 | CNT of head | CNT of slave | Connection |
 |---|---|---|
@@ -386,13 +386,20 @@ four connections at once:
 | 1 | 0 | 1, and 2 → 3 → 4 |
 | 1 | 1 | 1, and 2 → 3, and 4 |
 
+Reading CNT as *"this half's first operator goes straight to the output
+instead of modulating"* gives three of the four rows, and not the second: with
+the head's CNT 0 and the slave's 1, the chip makes two FM pairs side by side,
+not 1 → 2 → 3 with 4 beside it.
+
 Feedback belongs to operator 1 alone; the slave's feedback setting has nothing
-to act on, because operator 3 is fed by the chain rather than by itself.
+to act on, because the chip feeds operator 3 from the chain — or, where it
+starts a pair of its own, from nothing — and never from itself.
 
 **§4's volume rule generalises through that table.** Channel volume scales the
 operators that reach the output and leaves the ones that only modulate alone,
 so it applies to operator 4 always, to operator 1 when the head's CNT is 1, to
-operator 3 when the slave's CNT is 1, and to operator 2 never. Note that this
+operator 2 when the head's CNT is 0 and the slave's 1, and to operator 3 when
+both are 1. Note that this
 depends on *both* halves' CNT bits, so loading the first pair's levels before
 the second pair's connection is known gets them wrong — send all four
 operators' 0x40 again once both halves are in.
