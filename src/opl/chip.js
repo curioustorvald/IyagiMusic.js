@@ -613,12 +613,15 @@ class OplChip {
    * One four-operator voice: two channels' operators run as one chain.
    *
    * The two channels keep their own CNT bit in register 0xC0, and the four
-   * combinations are the four connections the YMF262's published figure draws.
-   * Reading CNT as "this half's first operator goes straight to the output
-   * instead of modulating" gives all four at once:
+   * combinations are the four connections the YMF262 data sheet draws
+   * (catalogue 4MF262A6, p. 13):
    *
-   *   0,0   1 → 2 → 3 → 4          0,1   1 → 2 → 3, and 4
+   *   0,0   1 → 2 → 3 → 4          0,1   1 → 2, and 3 → 4
    *   1,0   1, and 2 → 3 → 4       1,1   1, and 2 → 3, and 4
+   *
+   * 0,1 is two FM pairs side by side, not 1 → 2 → 3 with 4 beside it: the
+   * reading of CNT as "this half's first operator goes straight out" holds for
+   * the other three and not for that one.
    *
    * Feedback belongs to operator 1 only. The slave half's own feedback setting
    * has nowhere to act -- operator 3 is fed by the chain, not by itself -- so
@@ -633,10 +636,13 @@ class OplChip {
     const o1 = this.#operate(op1, this.#feedbackOf(head), tremolo, vibrato);
     if (!head.additive) {
       const o2 = this.#operate(op2, o1, tremolo, vibrato);
+      if (slave.additive) {
+        // Two pairs side by side: 1 → 2, and 3 → 4.
+        const o3 = this.#operate(op3, 0, tremolo, vibrato);
+        return o2 + this.#operate(op4, o3, tremolo, vibrato);
+      }
       const o3 = this.#operate(op3, o2, tremolo, vibrato);
-      return slave.additive
-        ? o3 + this.#operate(op4, 0, tremolo, vibrato)
-        : this.#operate(op4, o3, tremolo, vibrato);
+      return this.#operate(op4, o3, tremolo, vibrato);
     }
     const o2 = this.#operate(op2, 0, tremolo, vibrato);
     const o3 = this.#operate(op3, o2, tremolo, vibrato);

@@ -382,7 +382,7 @@ four connections at once:
 | CNT of head | CNT of slave | Connection |
 |---|---|---|
 | 0 | 0 | 1 → 2 → 3 → 4 |
-| 0 | 1 | 1 → 2 → 3, and 4 |
+| 0 | 1 | 1 → 2, and 3 → 4 |
 | 1 | 0 | 1, and 2 → 3 → 4 |
 | 1 | 1 | 1, and 2 → 3, and 4 |
 

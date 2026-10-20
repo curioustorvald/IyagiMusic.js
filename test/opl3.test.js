@@ -269,16 +269,15 @@ function fourOp(audible, { cnt1 = 0, cnt2 = 0 } = {}) {
 }
 
 test("the four connections are the four the register pair names", () => {
-  // Reading each half's CNT bit as "this half's first operator goes straight
-  // to the output" names all four connections at once, and each row here is
-  // one of them: an operator that reaches the output must be audible on its
+  // The YMF262 data sheet's four connections (catalogue 4MF262A6, p. 13),
+  // one per row: an operator that reaches the output must be audible on its
   // own, and one that only modulates a silenced operator must not.
   //
-  //   0,0   1 → 2 → 3 → 4          0,1   1 → 2 → 3, and 4
+  //   0,0   1 → 2 → 3 → 4          0,1   1 → 2, and 3 → 4
   //   1,0   1, and 2 → 3 → 4       1,1   1, and 2 → 3, and 4
   const outputs = {
     "0,0": [false, false, false, true],
-    "0,1": [false, false, true, true],
+    "0,1": [false, true, false, true],
     "1,0": [true, false, false, true],
     "1,1": [true, false, true, true],
   };

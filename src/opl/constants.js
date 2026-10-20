@@ -179,7 +179,7 @@ export const T_WAVE_MASK = 7, T_FEEDBACK_MASK = 7;
  * voice only the first has meaning -- modulation or addition. On a
  * four-operator voice the pair of them picks one of the four connections:
  *
- *   0,0   1 → 2 → 3 → 4          0,1   1 → 2 → 3, and 4
+ *   0,0   1 → 2 → 3 → 4          0,1   1 → 2, and 3 → 4
  *   1,0   1, and 2 → 3 → 4       1,1   1, and 2 → 3, and 4
  */
 
